@@ -1,0 +1,20 @@
+# ── Browser aliases ────────────────────────────────────────────────────────────
+# Define short names for browser commands here.
+# Useful for Flatpak installs or any long command.
+# Format: alias  full-command
+
+[browsers]
+# firefox      firefox
+# librewolf    flatpak run io.gitlab.librewolf-community
+# chromium     chromium
+
+
+# ── Domain routing ─────────────────────────────────────────────────────────────
+# Format: domain  browser-alias-or-command
+# Subdomains are matched automatically:
+#   "example.com" also catches "sub.example.com"
+# After editing, click the extension icon in Brave to reload.
+
+[domains]
+# github.com        librewolf
+# work.example.com  firefox

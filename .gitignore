@@ -1,0 +1,12 @@
+# Signing key — never commit this, it controls your extension ID
+extension.pem
+
+# Packed extension output
+*.crx
+
+# Personal configuration — edit domains.txt.example instead
+domains.txt
+
+# Python
+__pycache__/
+*.py[cod]

@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Open in Browser",
+  "version": "1.1",
+  "description": "Automatically opens configured domains in another browser, with right-click support",
+  "permissions": [
+    "nativeMessaging",
+    "declarativeNetRequest",
+    "webNavigation",
+    "tabs",
+    "storage",
+    "contextMenus"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Reload domains list"
+  }
+}

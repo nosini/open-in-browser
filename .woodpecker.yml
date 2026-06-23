@@ -1,0 +1,28 @@
+# Woodpecker CI — packs the extension into a signed .crx on every push/tag.
+# Enable this repo at https://ci.codeberg.org and add the signing key as a secret
+# named `extension_key_b64` (see README / commit notes for how to create it).
+
+when:
+  - event: [push, manual]
+    branch: main
+  - event: tag
+
+steps:
+  - name: build-crx
+    image: debian:bookworm-slim
+    environment:
+      # The RSA signing key, base64-encoded. Stored as a Woodpecker secret, never
+      # in the repo. Marked sensitive so it is masked in logs.
+      EXTENSION_KEY_B64:
+        from_secret: extension_key_b64
+    commands:
+      - apt-get update -qq
+      - apt-get install -y --no-install-recommends chromium openssl ca-certificates
+      # Fail loudly if the secret was not configured for this build.
+      - test -n "$EXTENSION_KEY_B64" || { echo "ERROR: secret extension_key_b64 is not set"; exit 1; }
+      # Decode the key into a temp file that is wiped no matter how the build ends.
+      - export EXTENSION_KEY_FILE="$(mktemp)"
+      - trap 'rm -f "$EXTENSION_KEY_FILE"' EXIT
+      - printf '%s' "$EXTENSION_KEY_B64" | base64 -d > "$EXTENSION_KEY_FILE"
+      - ./pack.sh
+      - 'echo "Built: $(ls -lh open-in-browser.crx)"'
