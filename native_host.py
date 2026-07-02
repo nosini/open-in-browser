@@ -5,6 +5,7 @@ Reads domains.txt from the same directory and launches the appropriate browser.
 """
 import json
 import os
+import re
 import shlex
 import struct
 import subprocess
@@ -31,23 +32,43 @@ def send_message(payload):
     sys.stdout.buffer.flush()
 
 
+def normalize_domain(domain):
+    """
+    Normalize a domain token so matching (and the extension's DNR batch) is
+    predictable: lowercase, strip a trailing '.', strip a leading '*.' or '.'
+    prefix. Returns "" for tokens that are empty after normalization.
+    """
+    domain = domain.strip().lower().rstrip(".")
+    if domain.startswith("*."):
+        domain = domain[2:]
+    elif domain.startswith("."):
+        domain = domain[1:]
+    return domain
+
+
 def parse_domains_file():
     """
     Parse domains.txt into browser aliases and domain entries.
-    Returns (aliases dict, entries list of {domain, browser} dicts).
+    Returns (aliases dict, entries list of {domain, browser} dicts, error or None).
     """
     aliases = {}
     entries = []
 
     if not os.path.exists(DOMAINS_FILE):
-        send_message({"error": f"domains.txt not found at {DOMAINS_FILE}"})
-        return aliases, entries
+        return aliases, entries, f"domains.txt not found at {DOMAINS_FILE}"
 
     section = None
     with open(DOMAINS_FILE, "r") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
+                continue
+
+            # An inline comment (whitespace + '#') ends the line so it never
+            # leaks into the browser command; a leading '#' is a full-line
+            # comment, already handled above.
+            line = re.sub(r"\s+#.*$", "", line).strip()
+            if not line:
                 continue
 
             if line.lower() == "[browsers]":
@@ -62,11 +83,13 @@ def parse_domains_file():
             if section == "browsers" and len(parts) == 2:
                 aliases[parts[0]] = parts[1].strip()
             elif section == "domains":
-                domain = parts[0]
+                domain = normalize_domain(parts[0])
+                if not domain:
+                    continue
                 browser = parts[1].strip() if len(parts) >= 2 else "firefox"
                 entries.append({"domain": domain, "browser": browser})
 
-    return aliases, entries
+    return aliases, entries, None
 
 
 def open_in_browser(url, browser):
@@ -89,15 +112,18 @@ def main():
     action = message.get("action")
 
     if action == "get_domains":
-        aliases, entries = parse_domains_file()
+        aliases, entries, error = parse_domains_file()
         resolved = [
             {"domain": e["domain"], "browser": aliases.get(e["browser"], e["browser"])}
             for e in entries
         ]
-        send_message({
+        payload = {
             "domains": resolved,
             "browsers": aliases,
-        })
+        }
+        if error:
+            payload["error"] = error
+        send_message(payload)
 
     elif action == "open":
         url = message.get("url", "")

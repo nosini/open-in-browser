@@ -13,6 +13,8 @@
 # Format: domain  browser-alias-or-command
 # Subdomains are matched automatically:
 #   "example.com" also catches "sub.example.com"
+# An inline comment is allowed after the browser field:
+#   "github.com  librewolf  # personal"
 # After editing, click the extension icon in Brave to reload.
 
 [domains]

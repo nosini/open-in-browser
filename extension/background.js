@@ -26,13 +26,26 @@ function callNativeHost(message) {
 async function loadDomains() {
   try {
     const response = await callNativeHost({ action: "get_domains" });
+
+    // A native-host error (e.g. missing domains.txt) must not wipe the working
+    // config: keep the cached domains, rules, and menus untouched.
+    if (response.error) {
+      console.error("[open-in-browser] Native host error:", response.error);
+      return getCachedDomains();
+    }
+
     const domains = response.domains || [];
     const browsers = response.browsers || {};
 
     await chrome.storage.local.set({ domains, browsers });
     console.log(`[open-in-browser] Loaded ${domains.length} domain(s)`);
 
-    await updateBlockRules(domains);
+    // Isolate the rules update so a rejected batch cannot skip menu rebuilding.
+    try {
+      await updateBlockRules(domains);
+    } catch (err) {
+      console.error("[open-in-browser] Failed to update block rules:", err.message);
+    }
     rebuildContextMenus(browsers);
     return domains;
   } catch (err) {
@@ -53,10 +66,12 @@ async function getCachedBrowsers() {
 
 // ── Connection blocking (declarativeNetRequest) ───────────────────────────────
 //
-// DNR rules are evaluated at the network layer *before* any connection is opened,
-// so the matched domains never get a DNS/TCP/TLS handshake from this browser. This
-// is what actually guarantees privacy — the webNavigation listener below only
-// handles the Firefox hand-off and cannot prevent the connection on its own.
+// DNR rules are evaluated at the network layer *before* any connection is opened.
+// They only cover top-level navigations (resourceTypes ["main_frame"]), so a
+// matched domain gets no DNS/TCP/TLS handshake when the user navigates to it in
+// this browser — which is what the Firefox hand-off relies on. Subresource
+// requests (iframes, images, fetches) to a matched domain from other sites are
+// NOT blocked; widening the scope would break third-party pages that embed it.
 
 async function updateBlockRules(domains) {
   // Replace the full dynamic ruleset on every load so removed domains stop being
@@ -75,7 +90,25 @@ async function updateBlockRules(domains) {
     },
   }));
 
-  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules });
+  // updateDynamicRules is atomic: one malformed domain rejects the whole batch.
+  // Try the batch first, then fall back to per-rule adds so one bad entry only
+  // disables itself instead of turning blocking off entirely.
+  try {
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules });
+  } catch (err) {
+    console.error("[open-in-browser] Batch rule update failed, adding individually:", err.message);
+    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
+    for (const rule of addRules) {
+      try {
+        await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [rule] });
+      } catch (ruleErr) {
+        console.error(
+          `[open-in-browser] Failed to block domain "${rule.condition.requestDomains[0]}":`,
+          ruleErr.message
+        );
+      }
+    }
+  }
 }
 
 // ── Context menus ─────────────────────────────────────────────────────────────
@@ -141,6 +174,10 @@ function matchDomain(hostname, domains) {
 // dispose of the (blocked) tab. Its async timing no longer affects privacy.
 
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
+  // Prerender/speculative navigations reuse the hosting tab's tabId; acting on
+  // them would close the user's active tab and launch the other browser with no
+  // click. DNR already blocks those fetches, so ignore anything not "active".
+  if (details.documentLifecycle && details.documentLifecycle !== "active") return;
   if (details.frameId !== 0) return;
   if (!details.url.startsWith("http")) return;
 
@@ -157,10 +194,11 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   const browser = matchDomain(hostname, domains);
   if (!browser) return;
 
-  chrome.tabs.remove(details.tabId);
-
+  // Hand off first; only discard the tab once the other browser actually opened.
+  // On failure the tab stays on the DNR-blocked error page, preserving the URL.
   try {
     await callNativeHost({ action: "open", url: details.url, browser });
+    chrome.tabs.remove(details.tabId);
   } catch (err) {
     console.error("[open-in-browser] Failed to open browser:", err.message);
   }

@@ -38,18 +38,32 @@ echo "==> Packing extension..."
 # Brave/Chromium puts the .crx next to the extension directory.
 # --no-sandbox lets this run as root inside CI containers; it only affects this
 # short one-shot packing process, not any browsing.
-"$BROWSER" \
+# chromium --pack-extension can still need an X display; use xvfb-run headless
+# when there is none.
+XVFB=()
+if [[ -z "${DISPLAY:-}" ]] && command -v xvfb-run &>/dev/null; then
+  XVFB=(xvfb-run -a)
+fi
+
+# Capture browser output so a headless/display failure is visible; keep `|| true`
+# so set -e doesn't kill the fallback check below.
+BROWSER_LOG="$(mktemp)"
+"${XVFB[@]}" "$BROWSER" \
   --pack-extension="$EXT_DIR" \
   --pack-extension-key="$KEY_FILE" \
   --no-sandbox \
-  --no-message-box 2>/dev/null || true
+  --no-message-box >"$BROWSER_LOG" 2>&1 || true
 
 BROWSER_CRX="$SCRIPT_DIR/extension.crx"
 if [[ -f "$BROWSER_CRX" ]]; then
   mv "$BROWSER_CRX" "$CRX_OUT"
+  rm -f "$BROWSER_LOG"
   echo "==> Done: $CRX_OUT"
 else
   echo "Error: Expected $BROWSER_CRX was not created. Check that the browser supports --pack-extension."
+  echo "==> Browser output:"
+  cat "$BROWSER_LOG"
+  rm -f "$BROWSER_LOG"
   exit 1
 fi
 
