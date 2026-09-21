@@ -25,8 +25,10 @@ and `python3`. The output is byte-identical for identical sources, and the
 extension ID still comes from the key, so it does not change.
 
 Enable Actions in the repository's **Settings → Units**. The workflow targets
-Codeberg's hosted `codeberg-small` runner with a five-minute limit and uses a
-Debian container with Node.js. See the current
+Codeberg's hosted `codeberg-tiny` runner, which allows 1 CPU and two minutes of
+runtime, and uses a Debian container with Node.js. Most of a run is the `apt-get`
+install; if that stops fitting in two minutes, move `runs-on` to
+`codeberg-small`. See the current
 [hosted runner availability and limits](https://codeberg.org/actions/meta).
 For a self-hosted runner, change `runs-on` to its label and use a container
 runner that supports the workflow's `container.image` setting.

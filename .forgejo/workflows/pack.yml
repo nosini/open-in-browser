@@ -9,8 +9,10 @@ on:
 jobs:
   pack:
     # See docs/forgejo-actions.md for runner and signing-secret setup.
-    runs-on: codeberg-small
-    timeout-minutes: 5
+    runs-on: codeberg-tiny
+    # codeberg-tiny is capped at 2 minutes of runtime on 1 CPU; match that here
+    # so a run that outgrows the runner fails as a timeout rather than a kill.
+    timeout-minutes: 2
     # Also restrict manually dispatched runs to the refs used for signing.
     if: ${{ forgejo.ref == 'refs/heads/main' || startsWith(forgejo.ref, 'refs/tags/v') }}
     container:
