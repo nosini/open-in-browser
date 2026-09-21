@@ -10,8 +10,8 @@ CRX_OUT="$SCRIPT_DIR/open-in-browser.crx"
 # ── Find a Chromium-based browser ─────────────────────────────────────────────
 
 BROWSER=""
-for candidate in brave brave-browser chromium chromium-browser google-chrome google-chrome-stable \
-                 /usr/bin/brave /usr/bin/brave-browser /usr/bin/chromium /usr/bin/chromium-browser; do
+for candidate in brave brave-browser brave-origin chromium chromium-browser google-chrome google-chrome-stable \
+                 /usr/bin/brave /usr/bin/brave-browser /usr/bin/brave-origin /usr/bin/chromium /usr/bin/chromium-browser; do
   if command -v "$candidate" &>/dev/null; then
     BROWSER="$candidate"
     break
