@@ -17,8 +17,8 @@ steps:
         from_secret: extension_key_b64
     commands:
       - apt-get update -qq
-      # xauth: xvfb-run needs it and --no-install-recommends won't pull it in
-      - apt-get install -y --no-install-recommends chromium openssl ca-certificates xvfb xauth
+      # pack.sh signs the .crx itself, so only Python and openssl are needed
+      - apt-get install -y --no-install-recommends python3 openssl ca-certificates
       # Fail loudly if the secret was not configured for this build.
       - test -n "$EXTENSION_KEY_B64" || { echo "ERROR: secret extension_key_b64 is not set"; exit 1; }
       # Decode the key into a temp file that is wiped no matter how the build ends.

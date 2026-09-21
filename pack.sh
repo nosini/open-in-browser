@@ -7,65 +7,29 @@ EXT_DIR="$SCRIPT_DIR/extension"
 KEY_FILE="${EXTENSION_KEY_FILE:-$SCRIPT_DIR/extension.pem}"
 CRX_OUT="$SCRIPT_DIR/open-in-browser.crx"
 
-# ── Find a Chromium-based browser ─────────────────────────────────────────────
+# ── Check tools ───────────────────────────────────────────────────────────────
+# crx3.py writes the signed package itself, so no browser is needed here.
 
-BROWSER=""
-for candidate in brave brave-browser brave-origin chromium chromium-browser google-chrome google-chrome-stable \
-                 /usr/bin/brave /usr/bin/brave-browser /usr/bin/brave-origin /usr/bin/chromium /usr/bin/chromium-browser; do
-  if command -v "$candidate" &>/dev/null; then
-    BROWSER="$candidate"
-    break
+for tool in python3 openssl; do
+  if ! command -v "$tool" &>/dev/null; then
+    echo "Error: $tool is required but was not found."
+    exit 1
   fi
 done
-
-if [[ -z "$BROWSER" ]]; then
-  echo "Error: Could not find a Chromium-based browser (Brave, Chromium, or Chrome). Is one installed?"
-  exit 1
-fi
 
 # ── Generate key if needed ────────────────────────────────────────────────────
 
 if [[ ! -f "$KEY_FILE" ]]; then
   echo "==> Generating signing key: $KEY_FILE"
-  openssl genrsa -out "$KEY_FILE" 2048 2>/dev/null
+  (umask 077 && openssl genrsa -out "$KEY_FILE" 2048 2>/dev/null)
   echo "    Keep this file — you need it to publish updates to the same extension ID."
 fi
 
 # ── Pack the extension ────────────────────────────────────────────────────────
 
 echo "==> Packing extension..."
-
-# Brave/Chromium puts the .crx next to the extension directory.
-# --no-sandbox lets this run as root inside CI containers; it only affects this
-# short one-shot packing process, not any browsing.
-# chromium --pack-extension can still need an X display; use xvfb-run headless
-# when there is none.
-XVFB=()
-if [[ -z "${DISPLAY:-}" ]] && command -v xvfb-run &>/dev/null; then
-  XVFB=(xvfb-run -a)
-fi
-
-# Capture browser output so a headless/display failure is visible; keep `|| true`
-# so set -e doesn't kill the fallback check below.
-BROWSER_LOG="$(mktemp)"
-"${XVFB[@]}" "$BROWSER" \
-  --pack-extension="$EXT_DIR" \
-  --pack-extension-key="$KEY_FILE" \
-  --no-sandbox \
-  --no-message-box >"$BROWSER_LOG" 2>&1 || true
-
-BROWSER_CRX="$SCRIPT_DIR/extension.crx"
-if [[ -f "$BROWSER_CRX" ]]; then
-  mv "$BROWSER_CRX" "$CRX_OUT"
-  rm -f "$BROWSER_LOG"
-  echo "==> Done: $CRX_OUT"
-else
-  echo "Error: Expected $BROWSER_CRX was not created. Check that the browser supports --pack-extension."
-  echo "==> Browser output:"
-  cat "$BROWSER_LOG"
-  rm -f "$BROWSER_LOG"
-  exit 1
-fi
+EXT_ID="$(python3 "$SCRIPT_DIR/crx3.py" "$EXT_DIR" "$KEY_FILE" "$CRX_OUT")"
+echo "==> Done: $CRX_OUT"
 
 echo ""
 echo "To install in Brave:"
@@ -73,6 +37,10 @@ echo "  1. Go to brave://extensions"
 echo "  2. Enable Developer mode"
 echo "  3. Drag and drop $CRX_OUT onto the page"
 echo ""
-echo "Note: The Extension ID is derived from your key file."
-echo "Update the native host manifest with this ID if you haven't already."
+echo "Extension ID (derived from $KEY_FILE):"
+echo "  $EXT_ID"
+echo ""
+echo "Update the native host manifest with this ID if you haven't already:"
+echo "  sed -i 's/EXTENSION_ID_HERE/$EXT_ID/' \\"
+echo "    \"\$HOME/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/open_in_firefox.json\""
 echo ""

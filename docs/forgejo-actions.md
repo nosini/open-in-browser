@@ -1,9 +1,15 @@
 # Packing with Forgejo Actions
 
-[The workflow](../.forgejo/workflows/pack.yml) tests the project, runs `pack.sh`
-with Chromium, and uploads the signed `open-in-browser.crx` as a downloadable
-workflow artifact. It runs on pushes to `main`, tags starting with `v`, and
-manual runs on those refs. Artifacts are retained for 30 days.
+[The workflow](../.forgejo/workflows/pack.yml) tests the project, runs `pack.sh`,
+and uploads the signed `open-in-browser.crx` as a downloadable workflow
+artifact. It runs on pushes to `main`, tags starting with `v`, and manual runs
+on those refs. Artifacts are retained for 30 days.
+
+Packing needs no browser: [`crx3.py`](../crx3.py) writes the CRX3 container
+(a zip behind a protobuf header holding the public key and signature) and signs
+it with `openssl`, so the job installs only `git`, `ca-certificates`, `openssl`
+and `python3`. The output is byte-identical for identical sources, and the
+extension ID still comes from the key, so it does not change.
 
 Enable Actions in the repository's **Settings → Units**. The workflow targets
 Codeberg's hosted `codeberg-small` runner with a five-minute limit and uses a
