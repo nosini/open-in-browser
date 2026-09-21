@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Native messaging host for the "Open in Browser" Brave extension.
-Reads domains.txt from the same directory and launches the appropriate browser.
+Native messaging host for the "Open in Browser" extension.
+Reads domains.txt and launches the appropriate browser.
 """
 import json
 import os
@@ -10,7 +10,33 @@ import struct
 import subprocess
 import sys
 
-DOMAINS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "domains.txt")
+CONFIG_DIR_NAME = "open-in-browser"
+
+
+def default_domains_file():
+    """
+    Locate domains.txt. install.sh copies this script to ~/.local/bin, so the
+    config lives in the XDG config directory rather than beside the script; a
+    plain checkout that was never installed still works from its own directory.
+    """
+    override = os.environ.get("OPEN_IN_BROWSER_DOMAINS")
+    if override:
+        return override
+
+    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    config_path = os.path.join(config_home, CONFIG_DIR_NAME, "domains.txt")
+    if os.path.exists(config_path):
+        return config_path
+
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "domains.txt")
+    if os.path.exists(local_path):
+        return local_path
+
+    # Neither exists: report the installed location in the "not found" error.
+    return config_path
+
+
+DOMAINS_FILE = default_domains_file()
 
 
 def read_message():

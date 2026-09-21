@@ -1,9 +1,20 @@
 # Packing with Forgejo Actions
 
 [The workflow](../.forgejo/workflows/pack.yml) tests the project, runs `pack.sh`,
-and uploads the signed `open-in-browser.crx` as a downloadable workflow
-artifact. It runs on pushes to `main`, tags starting with `v`, and manual runs
-on those refs. Artifacts are retained for 30 days.
+and publishes the signed `open-in-browser.crx`. It runs on pushes to `main`,
+tags starting with `v`, and manual runs on those refs.
+
+Where the `.crx` goes depends on the ref:
+
+- **A `v*` tag** publishes a release for that tag and attaches the `.crx` to it,
+  so the download URL is permanent. The release notes quote the extension ID.
+  Re-running a tag's workflow reuses the existing release and replaces the
+  attached file rather than adding a second copy of it.
+- **Any other ref** has no release to attach to, so the `.crx` stays a workflow
+  artifact, retained for 30 days.
+
+Releases use the automatic per-run token (`secrets.GITHUB_TOKEN`), which has
+write access to the repository; no extra secret is needed for them.
 
 Packing needs no browser: [`crx3.py`](../crx3.py) writes the CRX3 container
 (a zip behind a protobuf header holding the public key and signature) and signs
@@ -35,9 +46,10 @@ the CI secret should not be its only copy.
    [secret settings are here](https://codeberg.org/nosini/open-in-firefox/settings/actions/secrets).
    Keep both the PEM and the encoded value out of Git, issues, and build logs.
 
-3. Push the workflow and use **Actions → Pack extension → Run workflow** on
-   `main`, or let a push to `main` / a `v*` tag trigger it. Download the artifact
-   from the completed workflow run and extract `open-in-browser.crx`.
+3. Push a `v*` tag to cut a release, or use **Actions → Pack extension → Run
+   workflow** on `main` for a one-off build. Tagged runs leave
+   `open-in-browser.crx` on the release page; other runs leave it as an
+   artifact on the workflow run.
 
 Base64 is only an encoding for transport. Forgejo stores Actions secrets
 encrypted in its database and supplies them to the runner when needed; see

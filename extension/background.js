@@ -1,4 +1,4 @@
-const NATIVE_HOST = "open_in_firefox";
+const NATIVE_HOST = "open_in_browser";
 
 // ── Native host communication ─────────────────────────────────────────────────
 

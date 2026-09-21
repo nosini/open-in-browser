@@ -122,9 +122,20 @@ def pack(extension_dir, key_file, crx_out):
     return extension_id(public_key)
 
 
+USAGE = """Usage: {name} <extension-dir> <key.pem> <output.crx>
+       {name} --id <key.pem>
+
+Packs and signs an extension, printing its extension ID. With --id, only
+prints the ID the key produces, without packing anything."""
+
+
 def main(argv):
-    if len(argv) != 4:
-        print(f"Usage: {Path(argv[0]).name} <extension-dir> <key.pem> <output.crx>", file=sys.stderr)
+    name = Path(argv[0]).name
+    if len(argv) == 3 and argv[1] == "--id":
+        print(extension_id(public_key_der(argv[2])))
+        return 0
+    if len(argv) != 4 or argv[1].startswith("-"):
+        print(USAGE.format(name=name), file=sys.stderr)
         return 2
     print(pack(argv[1], argv[2], argv[3]))
     return 0

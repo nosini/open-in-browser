@@ -66,7 +66,13 @@ jobs:
           ./pack.sh
           test -s open-in-browser.crx
 
+          # The ID is public (a hash of the key's public half) and the release
+          # notes quote it, so hand it on before the key is wiped.
+          echo "EXTENSION_ID=$(python3 crx3.py --id "$EXTENSION_KEY_FILE")" >> "$GITHUB_ENV"
+
       - name: Upload signed extension
+        # Untagged builds have no release to attach to, so they stay artifacts.
+        if: ${{ !startsWith(forgejo.ref, 'refs/tags/v') }}
         # Forgejo's patched v4 supports its artifact service; upstream v4 does not.
         uses: https://data.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
         with:
@@ -74,3 +80,53 @@ jobs:
           path: open-in-browser.crx
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish release
+        if: ${{ startsWith(forgejo.ref, 'refs/tags/v') }}
+        env:
+          # Automatic per-run token; has write access to this repository.
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}
+          TAG: ${{ forgejo.ref_name }}
+        run: |
+          set -euo pipefail
+
+          api() {
+            local method="$1" path="$2"
+            shift 2
+            curl -sS --fail-with-body -X "$method" \
+              -H "Authorization: token $FORGEJO_TOKEN" \
+              -H "Accept: application/json" "$@" "$API$path"
+          }
+
+          # jq is not installed; python3 is already here for the packer.
+          field() { python3 -c 'import json,sys; print(json.load(sys.stdin)["'"$1"'"])'; }
+
+          # Reuse the release if one already exists for this tag, so re-running
+          # the workflow replaces the asset instead of failing outright.
+          if release="$(api GET "/releases/tags/$TAG" 2>/dev/null)"; then
+            release_id="$(printf '%s' "$release" | field id)"
+            echo "Updating existing release $TAG ($release_id)"
+          else
+            notes="Signed extension package, built from \`$TAG\`.
+
+          Extension ID: \`$EXTENSION_ID\`
+
+          Open your browser's extensions page with Developer mode enabled, drag
+          \`open-in-browser.crx\` onto it, then run \`./install.sh\` from a
+          checkout to register the native messaging host."
+            payload="$(NOTES="$notes" python3 -c 'import json,os; print(json.dumps({"tag_name": os.environ["TAG"], "name": os.environ["TAG"], "body": os.environ["NOTES"], "draft": False, "prerelease": False}))')"
+            release_id="$(printf '%s' "$payload" | api POST /releases -H "Content-Type: application/json" -d @- | field id)"
+            echo "Created release $TAG ($release_id)"
+          fi
+
+          # Uploading a name that already exists would add a second asset.
+          existing="$(api GET "/releases/$release_id/assets" \
+            | python3 -c 'import json,sys; print(next((str(a["id"]) for a in json.load(sys.stdin) if a["name"] == "open-in-browser.crx"), ""))')"
+          if [[ -n "$existing" ]]; then
+            api DELETE "/releases/$release_id/assets/$existing" >/dev/null
+          fi
+
+          api POST "/releases/$release_id/assets?name=open-in-browser.crx" \
+            -F "attachment=@open-in-browser.crx;type=application/x-chrome-extension" >/dev/null
+          echo "Attached open-in-browser.crx to $TAG"

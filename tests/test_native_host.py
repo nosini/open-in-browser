@@ -52,5 +52,51 @@ class DomainsFileTests(unittest.TestCase):
                     self.assertEqual(launch.call_args.args[0], arguments + ["https://example.com/"])
 
 
+class DomainsFileLocationTests(unittest.TestCase):
+    def setUp(self):
+        workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        self.home = Path(workspace.name)
+        self.config = self.home / "config" / "open-in-browser" / "domains.txt"
+        self.config.parent.mkdir(parents=True)
+        self.checkout = self.home / "checkout"
+        self.checkout.mkdir()
+
+        environment = {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / "config")}
+        patcher = patch.dict(native_host.os.environ, environment, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        native_host.os.environ.pop("OPEN_IN_BROWSER_DOMAINS", None)
+
+        # The installed host lives in ~/.local/bin, away from any checkout.
+        file_patcher = patch.object(native_host, "__file__", str(self.checkout / "native_host.py"))
+        file_patcher.start()
+        self.addCleanup(file_patcher.stop)
+
+    def test_environment_override_wins(self):
+        self.config.write_text("")
+        native_host.os.environ["OPEN_IN_BROWSER_DOMAINS"] = "/somewhere/else.txt"
+        self.assertEqual(native_host.default_domains_file(), "/somewhere/else.txt")
+
+    def test_installed_config_is_preferred_over_the_checkout(self):
+        self.config.write_text("")
+        (self.checkout / "domains.txt").write_text("")
+        self.assertEqual(native_host.default_domains_file(), str(self.config))
+
+    def test_uninstalled_checkout_still_finds_its_own_file(self):
+        (self.checkout / "domains.txt").write_text("")
+        self.assertEqual(native_host.default_domains_file(), str(self.checkout / "domains.txt"))
+
+    def test_missing_everywhere_reports_the_installed_path(self):
+        self.assertEqual(native_host.default_domains_file(), str(self.config))
+
+    def test_config_home_defaults_to_dot_config(self):
+        del native_host.os.environ["XDG_CONFIG_HOME"]
+        expected = self.home / ".config" / "open-in-browser" / "domains.txt"
+        expected.parent.mkdir(parents=True)
+        expected.write_text("")
+        self.assertEqual(native_host.default_domains_file(), str(expected))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,9 @@
 #   "example.com" also catches "sub.example.com"
 # An inline comment is allowed after the browser field:
 #   "github.com  librewolf  # personal"
-# After editing, click the extension icon in Brave to reload.
+# After editing, click the extension icon to reload.
+# install.sh copies this file to ~/.config/open-in-browser/domains.txt, which
+# is where the native host reads it from.
 
 [domains]
 # github.com        librewolf
