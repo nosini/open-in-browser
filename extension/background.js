@@ -73,7 +73,16 @@ async function getCachedBrowsers() {
 // requests (iframes, images, fetches) to a matched domain from other sites are
 // NOT blocked; widening the scope would break third-party pages that embed it.
 
-async function updateBlockRules(domains) {
+let blockRulesUpdate = Promise.resolve();
+
+function updateBlockRules(domains) {
+  // Reloads must not overwrite each other's rules or temporary validation rule.
+  const update = blockRulesUpdate.then(() => replaceBlockRules(domains));
+  blockRulesUpdate = update.catch(() => {});
+  return update;
+}
+
+async function replaceBlockRules(domains) {
   // Replace the full dynamic ruleset on every load so removed domains stop being
   // blocked. requestDomains matches the domain and all of its subdomains, which
   // mirrors matchDomain()'s `hostname.endsWith("." + domain)` behavior.
@@ -91,22 +100,51 @@ async function updateBlockRules(domains) {
   }));
 
   // updateDynamicRules is atomic: one malformed domain rejects the whole batch.
-  // Try the batch first, then fall back to per-rule adds so one bad entry only
-  // disables itself instead of turning blocking off entirely.
+  // Try the batch first, then validate individually without removing the old
+  // protection. Only the final atomic update replaces the working ruleset.
   try {
     await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds, addRules });
   } catch (err) {
-    console.error("[open-in-browser] Batch rule update failed, adding individually:", err.message);
-    await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds });
-    for (const rule of addRules) {
-      try {
-        await chrome.declarativeNetRequest.updateDynamicRules({ addRules: [rule] });
-      } catch (ruleErr) {
-        console.error(
-          `[open-in-browser] Failed to block domain "${rule.condition.requestDomains[0]}":`,
-          ruleErr.message
-        );
+    console.error("[open-in-browser] Batch rule update failed, validating individually:", err.message);
+    const existingIds = new Set(removeRuleIds);
+    let validationId = 1;
+    while (existingIds.has(validationId)) validationId++;
+    const validRules = [];
+
+    try {
+      // Check that validation is possible using a known-good rule. If quota or
+      // storage prevents even this add, retain the old set instead of treating
+      // every replacement as invalid and committing an empty ruleset.
+      if (existing.length > 0) {
+        await chrome.declarativeNetRequest.updateDynamicRules({
+          addRules: [{ ...existing[0], id: validationId }],
+        });
       }
+
+      // Reuse one spare ID so validation needs only one additional rule slot.
+      for (const rule of addRules) {
+        try {
+          await chrome.declarativeNetRequest.updateDynamicRules({
+            removeRuleIds: [validationId],
+            addRules: [{ ...rule, id: validationId }],
+          });
+          validRules.push(rule);
+        } catch (ruleErr) {
+          console.error(
+            `[open-in-browser] Failed to block domain "${rule.condition.requestDomains[0]}":`,
+            ruleErr.message
+          );
+        }
+      }
+
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: [...removeRuleIds, validationId],
+        addRules: validRules,
+      });
+    } catch (fallbackErr) {
+      // A failed commit leaves the original rules intact; remove only the probe.
+      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [validationId] });
+      throw fallbackErr;
     }
   }
 }

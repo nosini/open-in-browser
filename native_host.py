@@ -5,7 +5,6 @@ Reads domains.txt from the same directory and launches the appropriate browser.
 """
 import json
 import os
-import re
 import shlex
 import struct
 import subprocess
@@ -46,6 +45,30 @@ def normalize_domain(domain):
     return domain
 
 
+def strip_inline_comment(line):
+    """Strip an unquoted comment, preserving shell quotes and escapes verbatim."""
+    quote = None
+    escaped = False
+    comment_start = True
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+        elif char == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if char == quote:
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+        elif char == "#" and comment_start:
+            return line[:index].rstrip()
+        elif char.isspace():
+            comment_start = True
+            continue
+        comment_start = False
+    return line
+
+
 def parse_domains_file():
     """
     Parse domains.txt into browser aliases and domain entries.
@@ -64,10 +87,9 @@ def parse_domains_file():
             if not line or line.startswith("#"):
                 continue
 
-            # An inline comment (whitespace + '#') ends the line so it never
-            # leaks into the browser command; a leading '#' is a full-line
-            # comment, already handled above.
-            line = re.sub(r"\s+#.*$", "", line).strip()
+            # Comments start after unquoted, unescaped whitespace; hashes inside
+            # quoted arguments or command tokens must survive for shlex.split().
+            line = strip_inline_comment(line).strip()
             if not line:
                 continue
 
