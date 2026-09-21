@@ -1,0 +1,76 @@
+name: Pack extension
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  pack:
+    # See docs/forgejo-actions.md for runner and signing-secret setup.
+    runs-on: codeberg-small
+    timeout-minutes: 5
+    # Also restrict manually dispatched runs to the refs used for signing.
+    if: ${{ forgejo.ref == 'refs/heads/main' || startsWith(forgejo.ref, 'refs/tags/v') }}
+    container:
+      image: node:22-bookworm-slim
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install packaging dependencies
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates chromium openssl python3 xvfb xauth
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Check out source
+        # actions/checkout v4, pinned to an immutable commit.
+        uses: https://data.forgejo.org/actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Run regression tests
+        run: |
+          set -euo pipefail
+          node --test tests/background.test.js
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Pack and sign extension
+        env:
+          EXTENSION_KEY_B64: ${{ secrets.EXTENSION_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$EXTENSION_KEY_B64" ]]; then
+            echo "Missing EXTENSION_KEY_B64 repository Actions secret." >&2
+            exit 1
+          fi
+
+          umask 077
+          signing_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/extension-signing.XXXXXX")"
+          trap 'rm -rf -- "$signing_dir"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          export EXTENSION_KEY_FILE="$signing_dir/extension.pem"
+          printf '%s' "$EXTENSION_KEY_B64" | base64 --decode > "$EXTENSION_KEY_FILE"
+          unset EXTENSION_KEY_B64
+
+          if ! openssl rsa -in "$EXTENSION_KEY_FILE" -passin pass: -check -noout >/dev/null 2>&1; then
+            echo "EXTENSION_KEY_B64 must contain a valid, unencrypted RSA private key." >&2
+            exit 1
+          fi
+
+          ./pack.sh
+          test -s open-in-browser.crx
+
+      - name: Upload signed extension
+        # Forgejo's patched v4 supports its artifact service; upstream v4 does not.
+        uses: https://data.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: open-in-browser-${{ forgejo.sha }}
+          path: open-in-browser.crx
+          if-no-files-found: error
+          retention-days: 30
