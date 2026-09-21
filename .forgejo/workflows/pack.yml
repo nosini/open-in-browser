@@ -68,7 +68,7 @@ jobs:
 
           # The ID is public (a hash of the key's public half) and the release
           # notes quote it, so hand it on before the key is wiped.
-          echo "EXTENSION_ID=$(python3 crx3.py --id "$EXTENSION_KEY_FILE")" >> "$GITHUB_ENV"
+          echo "EXTENSION_ID=$(python3 crx3.py --id "$EXTENSION_KEY_FILE")" >> "$FORGEJO_ENV"
 
       - name: Upload signed extension
         # Untagged builds have no release to attach to, so they stay artifacts.
@@ -85,7 +85,9 @@ jobs:
         if: ${{ startsWith(forgejo.ref, 'refs/tags/v') }}
         env:
           # Automatic per-run token; has write access to this repository.
-          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Swap in a repository secret holding a token with `write:repository`
+          # if this instance restricts the automatic one.
+          FORGEJO_TOKEN: ${{ forgejo.token }}
           API: ${{ forgejo.server_url }}/api/v1/repos/${{ forgejo.repository }}
           TAG: ${{ forgejo.ref_name }}
         run: |

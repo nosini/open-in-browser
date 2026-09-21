@@ -13,8 +13,10 @@ Where the `.crx` goes depends on the ref:
 - **Any other ref** has no release to attach to, so the `.crx` stays a workflow
   artifact, retained for 30 days.
 
-Releases use the automatic per-run token (`secrets.GITHUB_TOKEN`), which has
-write access to the repository; no extra secret is needed for them.
+Releases use the automatic per-run token (`forgejo.token`), which has write
+access to the repository, so they need no extra secret. If the instance
+restricts that token, point `FORGEJO_TOKEN` in the release step at a repository
+secret holding a token with the `write:repository` scope instead.
 
 Packing needs no browser: [`crx3.py`](../crx3.py) writes the CRX3 container
 (a zip behind a protobuf header holding the public key and signature) and signs
