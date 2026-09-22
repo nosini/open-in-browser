@@ -1,4 +1,4 @@
-const REPOSITORY = "https://codeberg.org/nosini/open-in-firefox";
+const REPOSITORY = "https://codeberg.org/nosini/open-in-browser";
 
 // Releases are tagged "v" + the manifest version (CI refuses tags that differ),
 // so the installer that gets downloaded always matches this extension.

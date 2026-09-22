@@ -2,12 +2,12 @@
 # Installs the native messaging host straight from a release, without a
 # checkout: downloads install.sh and the files it needs, then runs it.
 #
-#   curl -fsSL https://codeberg.org/nosini/open-in-firefox/raw/tag/v1.2/bootstrap.sh \
+#   curl -fsSL https://codeberg.org/nosini/open-in-browser/raw/tag/v1.2/bootstrap.sh \
 #     | bash -s -- --ref v1.2 --id <extension-id>
 #
 # The extension's setup page shows this command with both values filled in.
 
-REPOSITORY="${OPEN_IN_BROWSER_REPOSITORY:-https://codeberg.org/nosini/open-in-firefox}"
+REPOSITORY="${OPEN_IN_BROWSER_REPOSITORY:-https://codeberg.org/nosini/open-in-browser}"
 FILES=(install.sh native_host.py domains.txt.example)
 
 die() {

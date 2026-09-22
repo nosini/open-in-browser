@@ -29,8 +29,9 @@ secret holding a token with the `write:repository` scope instead.
 
 Packing needs no browser: [`crx3.py`](../crx3.py) writes the CRX3 container
 (a zip behind a protobuf header holding the public key and signature) and signs
-it with `openssl`, so the job installs only `git`, `ca-certificates`, `openssl`
-and `python3`. The output is byte-identical for identical sources, and the
+it with `openssl`, so the job installs only `git`, `ca-certificates`, `curl`
+(for the release upload), `openssl` and `python3`. The output is
+byte-identical for identical sources, and the
 extension ID still comes from the key, so it does not change.
 
 Enable Actions in the repository's **Settings → Units**. The workflow targets
@@ -56,7 +57,7 @@ the CI secret should not be its only copy.
 
 2. Open the repository's **Settings → Actions → Secrets** and add a secret named
    **`EXTENSION_KEY_B64`** with that output as its value. For this repository, the
-   [secret settings are here](https://codeberg.org/nosini/open-in-firefox/settings/actions/secrets).
+   [secret settings are here](https://codeberg.org/nosini/open-in-browser/settings/actions/secrets).
    Keep both the PEM and the encoded value out of Git, issues, and build logs.
 
 3. Push a `v*` tag to cut a release, or use **Actions → Pack extension → Run

@@ -64,14 +64,14 @@ async function page(reply) {
   return { element: (id) => elements[id], windowListeners, clipboard, sent };
 }
 
-const COMMAND = "curl -fsSL https://codeberg.org/nosini/open-in-firefox/raw/tag/v1.2/bootstrap.sh"
+const COMMAND = "curl -fsSL https://codeberg.org/nosini/open-in-browser/raw/tag/v1.2/bootstrap.sh"
   + ` | bash -s -- --ref v1.2 --id ${EXTENSION_ID}`;
 
 test("the command pins this version's installer and fills in this extension's ID", async () => {
   const state = await page({ ok: false, reachable: false, error: "not found" });
   assert.equal(state.element("command").textContent, COMMAND);
   assert.equal(state.element("extension-id").textContent, EXTENSION_ID);
-  assert.equal(state.element("source").href, "https://codeberg.org/nosini/open-in-firefox/src/tag/v1.2");
+  assert.equal(state.element("source").href, "https://codeberg.org/nosini/open-in-browser/src/tag/v1.2");
 
   await state.element("copy").listeners.click();
   assert.deepEqual(state.clipboard, [COMMAND]);
