@@ -26,8 +26,9 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update -qq
+          # curl is for the release upload; the slim image does not include it.
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            git ca-certificates openssl python3
+            git ca-certificates curl openssl python3
           rm -rf /var/lib/apt/lists/*
 
       - name: Check out source
@@ -97,22 +98,48 @@ jobs:
         run: |
           set -euo pipefail
 
-          api() {
+          RESPONSE="$(mktemp)"
+          trap 'rm -f "$RESPONSE"' EXIT
+
+          # Sends a request, saving the body to $RESPONSE, and prints the status.
+          request() {
             local method="$1" path="$2"
             shift 2
-            curl -sS --fail-with-body -X "$method" \
+            curl -sS -o "$RESPONSE" -w '%{http_code}' -X "$method" \
               -H "Authorization: token $FORGEJO_TOKEN" \
               -H "Accept: application/json" "$@" "$API$path"
+          }
+
+          # Prints the body of a successful request. Anything but a 2xx stops
+          # the run with the server's own reply, before any JSON parsing.
+          api() {
+            local status
+            status="$(request "$@")" || return 1
+            if [[ "$status" != 2?? ]]; then
+              echo "$1 $2 failed with HTTP $status:" >&2
+              cat "$RESPONSE" >&2
+              echo >&2
+              return 1
+            fi
+            cat "$RESPONSE"
           }
 
           # jq is not installed; python3 is already here for the packer.
           field() { python3 -c 'import json,sys; print(json.load(sys.stdin)["'"$1"'"])'; }
 
           # Reuse the release if one already exists for this tag, so re-running
-          # the workflow replaces the asset instead of failing outright.
-          if release="$(api GET "/releases/tags/$TAG" 2>/dev/null)"; then
-            release_id="$(printf '%s' "$release" | field id)"
+          # the workflow replaces the asset instead of failing outright. Only a
+          # 404 means "not created yet"; any other failure must stop here rather
+          # than fall through to creating a release.
+          status="$(request GET "/releases/tags/$TAG")"
+          if [[ "$status" == 200 ]]; then
+            release_id="$(field id < "$RESPONSE")"
             echo "Updating existing release $TAG ($release_id)"
+          elif [[ "$status" != 404 ]]; then
+            echo "Looking up the release for $TAG failed with HTTP $status:" >&2
+            cat "$RESPONSE" >&2
+            echo >&2
+            exit 1
           else
             notes="Signed extension package, built from \`$TAG\`.
 
@@ -122,12 +149,16 @@ jobs:
           \`open-in-browser.crx\` onto it, then run \`./install.sh\` from a
           checkout to register the native messaging host."
             payload="$(NOTES="$notes" python3 -c 'import json,os; print(json.dumps({"tag_name": os.environ["TAG"], "name": os.environ["TAG"], "body": os.environ["NOTES"], "draft": False, "prerelease": False}))')"
-            release_id="$(printf '%s' "$payload" | api POST /releases -H "Content-Type: application/json" -d @- | field id)"
+            # Capture before parsing: piping a failed call straight into the
+            # parser would bury the HTTP error under a JSON traceback.
+            created="$(printf '%s' "$payload" | api POST /releases -H "Content-Type: application/json" -d @-)"
+            release_id="$(printf '%s' "$created" | field id)"
             echo "Created release $TAG ($release_id)"
           fi
 
           # Uploading a name that already exists would add a second asset.
-          existing="$(api GET "/releases/$release_id/assets" \
+          assets="$(api GET "/releases/$release_id/assets")"
+          existing="$(printf '%s' "$assets" \
             | python3 -c 'import json,sys; print(next((str(a["id"]) for a in json.load(sys.stdin) if a["name"] == "open-in-browser.crx"), ""))')"
           if [[ -n "$existing" ]]; then
             api DELETE "/releases/$release_id/assets/$existing" >/dev/null
