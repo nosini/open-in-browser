@@ -1,8 +1,10 @@
 # Packing with Forgejo Actions
 
 [The workflow](../.forgejo/workflows/pack.yml) tests the project, runs `pack.sh`,
-and publishes the signed `open-in-browser.crx`. It runs on pushes to `main`,
-tags starting with `v`, and manual runs on those refs.
+and publishes the signed `open-in-browser.crx`. It runs on tags starting with
+`v`, and on manual runs of `main` or such a tag. Ordinary pushes to `main` do
+not trigger it: they produce no release, so there is nothing to sign for, and
+the signing key stays out of runs that have no use for it.
 
 Where the `.crx` goes depends on the ref:
 
@@ -10,8 +12,8 @@ Where the `.crx` goes depends on the ref:
   so the download URL is permanent. The release notes quote the extension ID.
   Re-running a tag's workflow reuses the existing release and replaces the
   attached file rather than adding a second copy of it.
-- **Any other ref** has no release to attach to, so the `.crx` stays a workflow
-  artifact, retained for 30 days.
+- **A manual run of `main`** has no release to attach to, so the `.crx` stays a
+  workflow artifact, retained for 30 days.
 
 Releases use the automatic per-run token (`forgejo.token`), which has write
 access to the repository, so they need no extra secret. If the instance

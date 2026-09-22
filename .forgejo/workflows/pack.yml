@@ -1,8 +1,9 @@
 name: Pack extension
 
 on:
+  # Only tags produce a release, so only tags are worth signing for. Use the
+  # manual run when you want a build of `main` without cutting a release.
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -73,7 +74,8 @@ jobs:
           echo "EXTENSION_ID=$(python3 crx3.py --id "$EXTENSION_KEY_FILE")" >> "$FORGEJO_ENV"
 
       - name: Upload signed extension
-        # Untagged builds have no release to attach to, so they stay artifacts.
+        # A manual run on `main` has no release to attach to, so it leaves the
+        # package as an artifact instead.
         if: ${{ !startsWith(forgejo.ref, 'refs/tags/v') }}
         # Forgejo's patched v4 supports its artifact service; upstream v4 does not.
         uses: https://data.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
