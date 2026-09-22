@@ -48,7 +48,7 @@ function setup(existing = [], { limit = 30000, rejectUpdate = () => false } = {}
         },
       },
       contextMenus: { onClicked: event },
-      runtime: { onInstalled: event, onStartup: event },
+      runtime: { onInstalled: event, onStartup: event, onMessage: event },
       action: { onClicked: event },
       webNavigation: { onBeforeNavigate: event },
     },
@@ -131,4 +131,131 @@ test("a failed reload does not prevent a subsequent update", async () => {
   await assert.rejects(state.update(domains("new.example", "bäd.example")));
   await state.update(domains("latest.example"));
   assert.deepEqual(state.getRules(), [blockRule(1, "latest.example")]);
+});
+
+// ── Setup page hand-off ───────────────────────────────────────────────────────
+
+const HOST_MISSING = () => ({ lastError: "Specified native messaging host not found." });
+const HOST_SILENT = () => ({ exit: true });
+const HOST_CONFIG_ERROR = () => ({ error: "domains.txt not found at /home/user/.config/open-in-browser/domains.txt" });
+const HOST_OK = () => ({ domains: domains("a.example"), browsers: {} });
+
+// Runs background.js against a simulated native host. `host` maps a request to
+// a reply, a disconnect with lastError, or a disconnect with no reply at all.
+function lifecycle(host) {
+  const listeners = {};
+  const on = (name) => ({ addListener(listener) { listeners[name] = listener; } });
+  const opened = [];
+  const stored = {};
+  const runtime = {
+    lastError: undefined,
+    onInstalled: on("installed"),
+    onStartup: on("startup"),
+    onMessage: on("message"),
+    getURL: (file) => `chrome-extension://test/${file}`,
+    connectNative() {
+      const messageListeners = [];
+      const disconnectListeners = [];
+      return {
+        onMessage: { addListener: (listener) => messageListeners.push(listener) },
+        onDisconnect: { addListener: (listener) => disconnectListeners.push(listener) },
+        disconnect() {},
+        postMessage(message) {
+          queueMicrotask(() => {
+            const outcome = host(message);
+            if ("lastError" in outcome || outcome.exit) {
+              runtime.lastError = outcome.lastError ? { message: outcome.lastError } : undefined;
+              for (const listener of disconnectListeners) listener();
+              runtime.lastError = undefined;
+            } else {
+              for (const listener of messageListeners) listener(outcome);
+            }
+          });
+        },
+      };
+    },
+  };
+  const context = {
+    console: { log() {}, error() {} },
+    chrome: {
+      runtime,
+      tabs: { create: ({ url }) => opened.push(url), remove() {} },
+      storage: {
+        local: {
+          async set(values) { Object.assign(stored, values); },
+          async get(key) { return { [key]: stored[key] }; },
+        },
+      },
+      contextMenus: { removeAll(callback) { callback?.(); }, create() {}, onClicked: on("menu") },
+      declarativeNetRequest: { async getDynamicRules() { return []; }, async updateDynamicRules() {} },
+      action: { onClicked: on("action") },
+      webNavigation: { onBeforeNavigate: on("navigate") },
+    },
+  };
+  vm.runInNewContext(source, context, { filename: "background.js" });
+
+  // structuredClone moves the reply out of the VM's realm, whose Object
+  // prototype would otherwise fail strict deep equality.
+  const checkHost = () => new Promise((resolve) => {
+    const reply = (status) => resolve(structuredClone(status));
+    assert.equal(listeners.message({ action: "check-host" }, {}, reply), true);
+  });
+  return { listeners, opened, stored, checkHost };
+}
+
+const SETUP_URL = "chrome-extension://test/setup.html";
+
+test("installing or updating without a reachable host opens the setup page", async () => {
+  for (const reason of ["install", "update"]) {
+    for (const host of [HOST_MISSING, HOST_SILENT]) {
+      const state = lifecycle(host);
+      await state.listeners.installed({ reason });
+      assert.deepEqual(state.opened, [SETUP_URL], `${reason} with ${host.name}`);
+    }
+  }
+});
+
+test("browser updates and working hosts leave the setup page closed", async () => {
+  const browserUpdate = lifecycle(HOST_MISSING);
+  await browserUpdate.listeners.installed({ reason: "chrome_update" });
+  assert.deepEqual(browserUpdate.opened, []);
+
+  const working = lifecycle(HOST_OK);
+  await working.listeners.installed({ reason: "install" });
+  assert.deepEqual(working.opened, []);
+  assert.deepEqual(working.stored.domains, domains("a.example"));
+
+  // A config problem is not an install problem; the icon click reports it.
+  const misconfigured = lifecycle(HOST_CONFIG_ERROR);
+  await misconfigured.listeners.installed({ reason: "install" });
+  assert.deepEqual(misconfigured.opened, []);
+});
+
+test("clicking the icon opens the setup page for any failure", async () => {
+  for (const host of [HOST_MISSING, HOST_SILENT, HOST_CONFIG_ERROR]) {
+    const state = lifecycle(host);
+    await state.listeners.action();
+    assert.deepEqual(state.opened, [SETUP_URL], host.name);
+  }
+  const working = lifecycle(HOST_OK);
+  await working.listeners.action();
+  assert.deepEqual(working.opened, []);
+});
+
+test("the setup page's check tells a missing host from a broken config", async () => {
+  assert.deepEqual(await lifecycle(HOST_MISSING).checkHost(), {
+    ok: false, reachable: false, error: "Specified native messaging host not found.",
+  });
+  assert.deepEqual(await lifecycle(HOST_SILENT).checkHost(), {
+    ok: false, reachable: false, error: "Native host exited without replying",
+  });
+  assert.deepEqual(await lifecycle(HOST_CONFIG_ERROR).checkHost(), {
+    ok: false, reachable: true, error: HOST_CONFIG_ERROR().error,
+  });
+  assert.deepEqual(await lifecycle(HOST_OK).checkHost(), { ok: true, reachable: true, count: 1 });
+});
+
+test("unrelated messages are left for other listeners", () => {
+  const state = lifecycle(HOST_OK);
+  assert.equal(state.listeners.message({ action: "something-else" }, {}, () => {}), false);
 });

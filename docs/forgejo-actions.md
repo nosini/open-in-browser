@@ -15,6 +15,13 @@ Where the `.crx` goes depends on the ref:
 - **A manual run of `main`** has no release to attach to, so the `.crx` stays a
   workflow artifact, retained for 30 days.
 
+**A release tag must be `v` + the `version` in `extension/manifest.json`**
+(e.g. `v1.2` for `"version": "1.2"`); the workflow refuses anything else. The
+extension's setup page builds its install command from its own version, so it
+downloads [`bootstrap.sh`](../bootstrap.sh), `install.sh` and `native_host.py`
+from that tag, and a mismatched tag would leave that command pointing at
+nothing. Bump the manifest version, commit, then tag.
+
 Releases use the automatic per-run token (`forgejo.token`), which has write
 access to the repository, so they need no extra secret. If the instance
 restricts that token, point `FORGEJO_TOKEN` in the release step at a repository

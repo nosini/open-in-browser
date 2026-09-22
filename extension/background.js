@@ -11,10 +11,11 @@ function callNativeHost(message) {
       resolve(response);
     });
 
+    // Always settle: a host that exits without replying must not leave callers
+    // waiting forever. Rejecting after a reply has resolved is a no-op.
     port.onDisconnect.addListener(() => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      }
+      const message = chrome.runtime.lastError?.message || "Native host exited without replying";
+      reject(new Error(message));
     });
 
     port.postMessage(message);
@@ -23,15 +24,25 @@ function callNativeHost(message) {
 
 // ── Domain list management ────────────────────────────────────────────────────
 
+// Resolves to { ok, reachable, error?, count? }. `reachable: false` means the
+// native host could not be started at all (not installed, not allowed for this
+// extension ID, or crashed), which only installing it can fix; `reachable:
+// true` with an error means the host ran but its config is broken.
 async function loadDomains() {
+  let response;
   try {
-    const response = await callNativeHost({ action: "get_domains" });
+    response = await callNativeHost({ action: "get_domains" });
+  } catch (err) {
+    console.error("[open-in-browser] Failed to reach the native host:", err.message);
+    return { ok: false, reachable: false, error: err.message };
+  }
 
+  try {
     // A native-host error (e.g. missing domains.txt) must not wipe the working
     // config: keep the cached domains, rules, and menus untouched.
     if (response.error) {
       console.error("[open-in-browser] Native host error:", response.error);
-      return getCachedDomains();
+      return { ok: false, reachable: true, error: response.error };
     }
 
     const domains = response.domains || [];
@@ -47,10 +58,10 @@ async function loadDomains() {
       console.error("[open-in-browser] Failed to update block rules:", err.message);
     }
     rebuildContextMenus(browsers);
-    return domains;
+    return { ok: true, reachable: true, count: domains.length };
   } catch (err) {
     console.error("[open-in-browser] Failed to load domains:", err.message);
-    return [];
+    return { ok: false, reachable: true, error: err.message };
   }
 }
 
@@ -242,11 +253,37 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   }
 });
 
+// ── Setup page ────────────────────────────────────────────────────────────────
+//
+// The extension cannot install its own native host, but it knows the two facts
+// the installer needs: its ID and its version. setup.html turns those into a
+// single command to paste into a terminal.
+
+function openSetupPage() {
+  chrome.tabs.create({ url: chrome.runtime.getURL("setup.html") });
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.action !== "check-host") return false;
+  loadDomains().then(sendResponse);
+  return true; // Keep the channel open for the asynchronous reply.
+});
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-chrome.runtime.onInstalled.addListener(loadDomains);
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+  const status = await loadDomains();
+  // Also covers updates across a host rename. Browser updates are left alone:
+  // popping a tab after every browser update would be noise.
+  if (!status.reachable && (reason === "install" || reason === "update")) {
+    openSetupPage();
+  }
+});
+
 chrome.runtime.onStartup.addListener(loadDomains);
 
 chrome.action.onClicked.addListener(async () => {
-  await loadDomains();
+  // A click is an explicit request, so explain any failure, config included.
+  const status = await loadDomains();
+  if (!status.ok) openSetupPage();
 });

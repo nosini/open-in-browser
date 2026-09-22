@@ -37,10 +37,24 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Check the tag matches the extension version
+        # The setup page downloads its installer from tag "v" + the manifest
+        # version, so a release under any other tag would point at nothing.
+        if: ${{ startsWith(forgejo.ref, 'refs/tags/v') }}
+        env:
+          TAG: ${{ forgejo.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "Tag $TAG does not match manifest version $version; tag this release v$version." >&2
+            exit 1
+          fi
+
       - name: Run regression tests
         run: |
           set -euo pipefail
-          node --test tests/background.test.js
+          node --test tests/*.test.js
           python3 -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Pack and sign extension
@@ -145,9 +159,9 @@ jobs:
 
           Extension ID: \`$EXTENSION_ID\`
 
-          Open your browser's extensions page with Developer mode enabled, drag
-          \`open-in-browser.crx\` onto it, then run \`./install.sh\` from a
-          checkout to register the native messaging host."
+          Open your browser's extensions page with Developer mode enabled and
+          drag \`open-in-browser.crx\` onto it. The extension then opens a setup
+          page with a one-line command that installs the helper app for it."
             payload="$(NOTES="$notes" python3 -c 'import json,os; print(json.dumps({"tag_name": os.environ["TAG"], "name": os.environ["TAG"], "body": os.environ["NOTES"], "draft": False, "prerelease": False}))')"
             # Capture before parsing: piping a failed call straight into the
             # parser would bury the HTTP error under a JSON traceback.

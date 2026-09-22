@@ -59,9 +59,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# ── Check tools ───────────────────────────────────────────────────────────────
+
+# The host is a Python script: without python3 a browser would find it but
+# never manage to start it.
+if ! command -v python3 &>/dev/null; then
+  echo "Error: python3 is required but was not found." >&2
+  exit 1
+fi
+
 # ── Work out the extension ID ─────────────────────────────────────────────────
 
-if [[ -z "$EXTENSION_ID" && -f "$SCRIPT_DIR/extension.pem" ]] && command -v python3 &>/dev/null; then
+# An ID passed in came from the extension itself (its setup page, or the
+# extensions page), so the extension is already installed.
+ID_FROM_EXTENSION="${EXTENSION_ID:+yes}"
+
+if [[ -z "$EXTENSION_ID" && -f "$SCRIPT_DIR/extension.pem" ]]; then
   # The ID is a hash of the signing key's public half, so the packed .crx and
   # this manifest agree without the browser having to be consulted.
   EXTENSION_ID="$(python3 "$SCRIPT_DIR/crx3.py" --id "$SCRIPT_DIR/extension.pem" 2>/dev/null || true)"
@@ -130,6 +143,9 @@ for user_data_dir in "${TARGETS[@]}"; do
 }
 EOF
   echo "    ${user_data_dir/#$HOME/\~}"
+  if [[ "$user_data_dir" == "$HOME/.var/app/"* ]]; then
+    echo "      (Flatpak: the sandbox usually cannot start programs outside it)"
+  fi
   # Earlier versions registered under a different name and pointed at the
   # checkout; leaving that manifest behind would keep a dead host registered.
   if [[ -f "$hosts_dir/open_in_firefox.json" ]]; then
@@ -159,23 +175,29 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo " Next steps in your browser:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "1. Open the extensions page (chrome://extensions, brave://extensions, ...)"
-echo "2. Enable 'Developer mode'"
-echo "3. Drag $SCRIPT_DIR/open-in-browser.crx onto the page,"
-echo "   or use 'Load unpacked' and select $SCRIPT_DIR/extension"
-echo ""
 
-if [[ -n "$PLACEHOLDER" ]]; then
-  echo "The extension ID is not known yet, so the host will refuse connections."
-  echo "Copy the ID shown under the extension name, then run:"
-  echo ""
-  echo "  $SCRIPT_DIR/install.sh --id <extension-id>"
-  echo ""
-  echo "Or run ./pack.sh first: a packed extension keeps the ID from"
-  echo "extension.pem, which this script picks up on its own."
+if [[ -n "$ID_FROM_EXTENSION" ]]; then
+  # The extension is already installed, and SCRIPT_DIR may be a temporary
+  # download (bootstrap.sh), so point back to the browser, not to files here.
+  echo "The helper is registered for extension $EXTENSION_ID."
+  echo "Return to the extension's setup page, or click its icon, to connect."
 else
-  echo "Allowed extension ID: $EXTENSION_ID"
-  echo "'Load unpacked' produces a different ID; re-run with --id if you use it."
+  echo "1. Open the extensions page (chrome://extensions, brave://extensions, ...)"
+  echo "2. Enable 'Developer mode'"
+  echo "3. Drag $SCRIPT_DIR/open-in-browser.crx onto the page,"
+  echo "   or use 'Load unpacked' and select $SCRIPT_DIR/extension"
+  echo ""
+
+  if [[ -n "$PLACEHOLDER" ]]; then
+    echo "The extension ID is not known yet, so the host will refuse connections."
+    echo "The extension opens a setup page with a command that fills it in;"
+    echo "or copy the ID shown under the extension name and run:"
+    echo ""
+    echo "  $SCRIPT_DIR/install.sh --id <extension-id>"
+  else
+    echo "Allowed extension ID: $EXTENSION_ID"
+    echo "'Load unpacked' produces a different ID; re-run with --id if you use it."
+  fi
 fi
 
 echo ""

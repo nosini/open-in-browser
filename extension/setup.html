@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light dark">
+  <title>Open in Browser — Setup</title>
+  <style>
+    body {
+      font: 15px/1.5 system-ui, sans-serif;
+      max-width: 44rem;
+      margin: 3rem auto;
+      padding: 0 1.5rem;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.1rem; margin-top: 2rem; }
+    .status { padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid; }
+    .status.pending { border-color: GrayText; }
+    .status.ok { border-color: #2e7d32; }
+    .status.error { border-color: #c62828; }
+    .detail { display: block; margin-top: 0.25rem; opacity: 0.8; font-size: 0.9em; }
+    pre {
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      background: color-mix(in srgb, CanvasText 8%, Canvas);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    button { font: inherit; padding: 0.35rem 0.9rem; margin-right: 0.5rem; }
+    .note { opacity: 0.8; font-size: 0.9em; }
+    code { font-size: 0.95em; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>Open in Browser</h1>
+  <p>Extension ID: <code id="extension-id"></code> · version <span id="version"></span></p>
+
+  <p id="status" class="status pending">Checking the helper app…</p>
+
+  <section id="install" hidden>
+    <h2>Install the helper app</h2>
+    <p>
+      Opening links in another browser needs a small helper program that the
+      extension cannot install by itself. Paste this into a terminal:
+    </p>
+    <pre><code id="command"></code></pre>
+    <p>
+      <button id="copy" type="button">Copy command</button>
+      <button id="check" type="button">Check again</button>
+    </p>
+    <p class="note">
+      It downloads <code>install.sh</code> and <code>native_host.py</code> for
+      this version from <a id="source" target="_blank" rel="noopener">the
+      project's repository</a>, installs the helper into
+      <code>~/.local/bin</code>, and registers it with every Chromium-based
+      browser it finds, allowing only this extension's ID. It needs
+      <code>curl</code> and <code>python3</code>. Browsers installed as Flatpak
+      or Snap usually cannot start helper programs.
+    </p>
+  </section>
+
+  <section id="configure" hidden>
+    <h2>Choose domains</h2>
+    <p>
+      Edit <code>~/.config/open-in-browser/domains.txt</code>, then click the
+      extension icon to reload it.
+    </p>
+  </section>
+
+  <script src="setup.js"></script>
+</body>
+</html>
