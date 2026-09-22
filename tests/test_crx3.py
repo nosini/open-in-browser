@@ -2,6 +2,7 @@ import hashlib
 import io
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -124,6 +125,33 @@ class Crx3Tests(unittest.TestCase):
         broken.write_text("not a key\n")
         with self.assertRaises(RuntimeError):
             crx3.pack(self.extension, broken, self.crx)
+
+    def run_cli(self, *arguments):
+        return subprocess.run(
+            [sys.executable, str(Path(crx3.__file__)), *map(str, arguments)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+    def test_cli_prints_the_id_for_a_key(self):
+        result = self.run_cli("--id", self.key)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), crx3.extension_id(crx3.public_key_der(self.key)))
+
+    def test_cli_reports_errors_in_one_line_without_a_traceback(self):
+        broken = self.directory / "broken.pem"
+        broken.write_text("not a key\n")
+        cases = [
+            (("--id", self.directory / "missing.pem"), "signing key not found"),
+            ((self.extension, self.directory / "missing.pem", self.crx), "signing key not found"),
+            (("--id", broken), "openssl rsa"),
+        ]
+        for arguments, expected in cases:
+            with self.subTest(arguments=arguments):
+                result = self.run_cli(*arguments)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(expected, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(result.stdout, "")
 
 
 if __name__ == "__main__":

@@ -131,13 +131,23 @@ prints the ID the key produces, without packing anything."""
 
 def main(argv):
     name = Path(argv[0]).name
-    if len(argv) == 3 and argv[1] == "--id":
-        print(extension_id(public_key_der(argv[2])))
-        return 0
-    if len(argv) != 4 or argv[1].startswith("-"):
+    is_id = len(argv) == 3 and argv[1] == "--id"
+    if not is_id and (len(argv) != 4 or argv[1].startswith("-")):
         print(USAGE.format(name=name), file=sys.stderr)
         return 2
-    print(pack(argv[1], argv[2], argv[3]))
+
+    key_file = Path(argv[2])
+    if not key_file.is_file():
+        print(f"{name}: signing key not found: {key_file}", file=sys.stderr)
+        return 1
+
+    # Expected failures (bad key, empty extension, unwritable output) are
+    # reported as one line; a traceback would only obscure them.
+    try:
+        print(extension_id(public_key_der(key_file)) if is_id else pack(argv[1], key_file, argv[3]))
+    except (RuntimeError, OSError) as error:
+        print(f"{name}: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
