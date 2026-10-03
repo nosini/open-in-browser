@@ -43,7 +43,7 @@ async function page(reply) {
     chrome: {
       runtime: {
         id: EXTENSION_ID,
-        getManifest: () => ({ version: "1.2" }),
+        getManifest: () => ({ version: "1.3" }),
         async sendMessage(message) {
           // Clone out of the VM's realm so strict deep equality can compare it.
           sent.push(structuredClone(message));
@@ -64,14 +64,14 @@ async function page(reply) {
   return { element: (id) => elements[id], windowListeners, clipboard, sent };
 }
 
-const COMMAND = "curl -fsSL https://codeberg.org/nosini/open-in-browser/raw/tag/v1.2/bootstrap.sh"
-  + ` | bash -s -- --ref v1.2 --id ${EXTENSION_ID}`;
+const COMMAND = "curl -fsSL https://raw.githubusercontent.com/nosini/open-in-browser/refs/tags/v1.3/bootstrap.sh"
+  + ` | bash -s -- --ref v1.3 --id ${EXTENSION_ID}`;
 
 test("the command pins this version's installer and fills in this extension's ID", async () => {
   const state = await page({ ok: false, reachable: false, error: "not found" });
   assert.equal(state.element("command").textContent, COMMAND);
   assert.equal(state.element("extension-id").textContent, EXTENSION_ID);
-  assert.equal(state.element("source").href, "https://codeberg.org/nosini/open-in-browser/src/tag/v1.2");
+  assert.equal(state.element("source").href, "https://github.com/nosini/open-in-browser/tree/v1.3");
 
   await state.element("copy").listeners.click();
   assert.deepEqual(state.clipboard, [COMMAND]);

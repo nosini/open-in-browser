@@ -1,0 +1,207 @@
+name: Pack extension
+
+on:
+  # Only tags produce a release, so only tags are worth signing for. Use the
+  # manual run when you want a build of `main` without cutting a release.
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize rebuilds of a tag so asset replacement cannot race another run.
+concurrency:
+  group: pack-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    # See docs/github-actions.md for runner and signing-secret setup.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    # Also restrict manually dispatched runs to the refs used for signing.
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+    container:
+      image: node:22-bookworm-slim
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install packaging dependencies
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          # curl is for the release upload; the slim image does not include it.
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates curl openssl python3
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Check out source
+        # actions/checkout v4, pinned to an immutable commit.
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Check the tag matches the extension version
+        # The setup page downloads its installer from tag "v" + the manifest
+        # version, so a release under any other tag would point at nothing.
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "Tag $TAG does not match manifest version $version; tag this release v$version." >&2
+            exit 1
+          fi
+
+      - name: Run regression tests
+        run: |
+          set -euo pipefail
+          node --test tests/*.test.js
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Pack and sign extension
+        env:
+          EXTENSION_KEY_B64: ${{ secrets.EXTENSION_KEY_B64 }}
+          # Public ID of the existing signed releases; keep updates compatible.
+          EXPECTED_EXTENSION_ID: hmnaaabjcgghcemfngkfgpbgihanbdhb
+        run: |
+          set -euo pipefail
+          if [[ -z "$EXTENSION_KEY_B64" ]]; then
+            echo "Missing EXTENSION_KEY_B64 repository Actions secret." >&2
+            exit 1
+          fi
+
+          umask 077
+          signing_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/extension-signing.XXXXXX")"
+          trap 'rm -rf -- "$signing_dir"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          export EXTENSION_KEY_FILE="$signing_dir/extension.pem"
+          printf '%s' "$EXTENSION_KEY_B64" | base64 --decode > "$EXTENSION_KEY_FILE"
+          unset EXTENSION_KEY_B64
+
+          if ! openssl rsa -in "$EXTENSION_KEY_FILE" -passin pass: -check -noout >/dev/null 2>&1; then
+            echo "EXTENSION_KEY_B64 must contain a valid, unencrypted RSA private key." >&2
+            exit 1
+          fi
+
+          extension_id="$(python3 crx3.py --id "$EXTENSION_KEY_FILE")"
+          if [[ "$extension_id" != "$EXPECTED_EXTENSION_ID" ]]; then
+            echo "The signing key does not match the existing extension ID ($EXPECTED_EXTENSION_ID)." >&2
+            exit 1
+          fi
+
+          ./pack.sh
+          test -s open-in-browser.crx
+
+          # The ID is public (a hash of the key's public half) and the release
+          # notes quote it, so hand it on before the key is wiped.
+          echo "EXTENSION_ID=$extension_id" >> "$GITHUB_ENV"
+
+      - name: Upload signed extension
+        # A manual run on `main` has no release to attach to, so it leaves the
+        # package as an artifact instead.
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        # actions/upload-artifact v4, pinned to an immutable commit.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: open-in-browser-${{ github.sha }}
+          path: open-in-browser.crx
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          # Automatic per-run token, granted contents: write by this job.
+          GH_TOKEN: ${{ github.token }}
+          API: ${{ github.api_url }}/repos/${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          RESPONSE="$(mktemp)"
+          trap 'rm -f "$RESPONSE"' EXIT
+
+          # Sends a request, saving the body to $RESPONSE, and prints the status.
+          request() {
+            local method="$1" path="$2"
+            shift 2
+            curl -sS -o "$RESPONSE" -w '%{http_code}' -X "$method" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" "$@" "$API$path"
+          }
+
+          # Prints the body of a successful request. Anything but a 2xx stops
+          # the run with the server's own reply, before any JSON parsing.
+          api() {
+            local status
+            status="$(request "$@")" || return 1
+            if [[ "$status" != 2?? ]]; then
+              echo "$1 $2 failed with HTTP $status:" >&2
+              cat "$RESPONSE" >&2
+              echo >&2
+              return 1
+            fi
+            cat "$RESPONSE"
+          }
+
+          # jq is not installed; python3 is already here for the packer.
+          field() { python3 -c 'import json,sys; print(json.load(sys.stdin)["'"$1"'"])'; }
+
+          # Reuse the release if one already exists for this tag, so re-running
+          # the workflow replaces the asset instead of failing outright. Only a
+          # 404 means "not created yet"; any other failure must stop here rather
+          # than fall through to creating a release.
+          status="$(request GET "/releases/tags/$TAG")"
+          if [[ "$status" == 200 ]]; then
+            release_id="$(field id < "$RESPONSE")"
+            upload_url="$(field upload_url < "$RESPONSE")"
+            echo "Updating existing release $TAG ($release_id)"
+          elif [[ "$status" != 404 ]]; then
+            echo "Looking up the release for $TAG failed with HTTP $status:" >&2
+            cat "$RESPONSE" >&2
+            echo >&2
+            exit 1
+          else
+            notes="Signed extension package, built from \`$TAG\`.
+
+          Extension ID: \`$EXTENSION_ID\`
+
+          Open your browser's extensions page with Developer mode enabled and
+          drag \`open-in-browser.crx\` onto it. The extension then opens a setup
+          page with a one-line command that installs the helper app for it."
+            payload="$(NOTES="$notes" python3 -c 'import json,os; print(json.dumps({"tag_name": os.environ["TAG"], "name": os.environ["TAG"], "body": os.environ["NOTES"], "draft": False, "prerelease": False}))')"
+            # Capture before parsing: piping a failed call straight into the
+            # parser would bury the HTTP error under a JSON traceback.
+            created="$(printf '%s' "$payload" | api POST /releases -H "Content-Type: application/json" -d @-)"
+            release_id="$(printf '%s' "$created" | field id)"
+            upload_url="$(printf '%s' "$created" | field upload_url)"
+            echo "Created release $TAG ($release_id)"
+          fi
+
+          # Uploading a name that already exists would add a second asset.
+          assets="$(api GET "/releases/$release_id/assets")"
+          existing="$(printf '%s' "$assets" \
+            | python3 -c 'import json,sys; print(next((str(a["id"]) for a in json.load(sys.stdin) if a["name"] == "open-in-browser.crx"), ""))')"
+          if [[ -n "$existing" ]]; then
+            api DELETE "/releases/assets/$existing" >/dev/null
+          fi
+
+          # GitHub uploads use the release's upload_url and a binary body.
+          upload_url="${upload_url%%\{*}"
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Content-Type: application/x-chrome-extension" \
+            --data-binary @open-in-browser.crx \
+            "$upload_url?name=open-in-browser.crx" >/dev/null
+          echo "Attached open-in-browser.crx to $TAG"

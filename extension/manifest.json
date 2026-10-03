@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Open in Browser",
-  "version": "1.2",
+  "version": "1.3",
   "description": "Automatically opens configured domains in another browser, with right-click support",
   "permissions": [
     "nativeMessaging",

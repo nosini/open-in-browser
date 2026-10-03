@@ -1,10 +1,11 @@
-const REPOSITORY = "https://codeberg.org/nosini/open-in-browser";
+const RAW_REPOSITORY = "https://raw.githubusercontent.com/nosini/open-in-browser";
+const REPOSITORY = "https://github.com/nosini/open-in-browser";
 
 // Releases are tagged "v" + the manifest version (CI refuses tags that differ),
 // so the installer that gets downloaded always matches this extension.
 function installCommand(extensionId, version) {
   const ref = `v${version}`;
-  return `curl -fsSL ${REPOSITORY}/raw/tag/${ref}/bootstrap.sh | bash -s -- --ref ${ref} --id ${extensionId}`;
+  return `curl -fsSL ${RAW_REPOSITORY}/refs/tags/${ref}/bootstrap.sh | bash -s -- --ref ${ref} --id ${extensionId}`;
 }
 
 const { version } = chrome.runtime.getManifest();
@@ -14,7 +15,7 @@ const element = (id) => document.getElementById(id);
 element("extension-id").textContent = chrome.runtime.id;
 element("version").textContent = version;
 element("command").textContent = command;
-element("source").href = `${REPOSITORY}/src/tag/v${version}`;
+element("source").href = `${REPOSITORY}/tree/v${version}`;
 
 // Host-supplied text only ever goes through textContent, never innerHTML.
 function showStatus(kind, message, detail) {

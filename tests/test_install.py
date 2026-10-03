@@ -12,12 +12,12 @@ from pathlib import Path
 REPOSITORY = Path(__file__).resolve().parent.parent
 EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop"
 
-# Refs the fake forge knows about; everything else is a 404, like Codeberg.
-KNOWN_REFS = {("tag", "v1.2"), ("branch", "main")}
+# Refs the fake raw-file server knows about; everything else is a 404.
+KNOWN_REFS = {("tags", "v1.3"), ("heads", "main")}
 
 
 class RawFiles(BaseHTTPRequestHandler):
-    """Serves this checkout under Codeberg's /raw/<kind>/<ref>/<path> layout."""
+    """Serves this checkout under GitHub's /refs/<kind>/<ref>/<path> raw-file layout."""
 
     requests = []
 
@@ -26,8 +26,8 @@ class RawFiles(BaseHTTPRequestHandler):
 
     def do_GET(self):
         RawFiles.requests.append(self.path)
-        parts = self.path.split("/", 4)  # "", "raw", kind, ref, path
-        if len(parts) == 5 and parts[1] == "raw" and (parts[2], parts[3]) in KNOWN_REFS:
+        parts = self.path.split("/", 4)  # "", "refs", kind, ref, path
+        if len(parts) == 5 and parts[1] == "refs" and (parts[2], parts[3]) in KNOWN_REFS:
             file = REPOSITORY / parts[4]
             if file.is_file():
                 data = file.read_bytes()
@@ -109,12 +109,12 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(list(self.tmp.iterdir()), [], "download directory left behind")
 
     def test_the_setup_page_command_installs_a_working_host(self):
-        result = self.bootstrap("--ref", "v1.2", "--id", EXTENSION_ID, piped=True)
+        result = self.bootstrap("--ref", "v1.3", "--id", EXTENSION_ID, piped=True)
         self.assert_installed(result)
         self.assertEqual(sorted(RawFiles.requests), [
-            "/raw/tag/v1.2/domains.txt.example",
-            "/raw/tag/v1.2/install.sh",
-            "/raw/tag/v1.2/native_host.py",
+            "/refs/tags/v1.3/domains.txt.example",
+            "/refs/tags/v1.3/install.sh",
+            "/refs/tags/v1.3/native_host.py",
         ])
 
         # The installed host answers the way the extension will ask it.
@@ -128,7 +128,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_run_from_a_file_and_branch_refs(self):
         self.assert_installed(self.bootstrap("--id", EXTENSION_ID, "--ref", "main"))
-        self.assertTrue(all(path.startswith("/raw/branch/main/") for path in RawFiles.requests))
+        self.assertTrue(all(path.startswith("/refs/heads/main/") for path in RawFiles.requests))
 
     def test_a_missing_release_installs_nothing(self):
         result = self.bootstrap("--ref", "v9.9", "--id", EXTENSION_ID)
@@ -139,7 +139,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(list(self.tmp.iterdir()), [])
 
     def test_a_bad_or_missing_id_fails_before_downloading(self):
-        for arguments in (["--id", "NOTVALID"], ["--ref", "v1.2"], ["--id"]):
+        for arguments in (["--id", "NOTVALID"], ["--ref", "v1.3"], ["--id"]):
             with self.subTest(arguments=arguments):
                 result = self.bootstrap(*arguments)
                 self.assertNotEqual(result.returncode, 0)
@@ -153,7 +153,7 @@ class BootstrapTests(unittest.TestCase):
         script = (REPOSITORY / "bootstrap.sh").read_text()
         truncated = script[:script.rindex('main "$@"')]
         result = subprocess.run(
-            ["bash", "-s", "--", "--ref", "v1.2", "--id", EXTENSION_ID],
+            ["bash", "-s", "--", "--ref", "v1.3", "--id", EXTENSION_ID],
             input=truncated, env=self.environment(),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60,
         )

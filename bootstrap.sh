@@ -2,12 +2,13 @@
 # Installs the native messaging host straight from a release, without a
 # checkout: downloads install.sh and the files it needs, then runs it.
 #
-#   curl -fsSL https://codeberg.org/nosini/open-in-browser/raw/tag/v1.2/bootstrap.sh \
-#     | bash -s -- --ref v1.2 --id <extension-id>
+#   curl -fsSL https://raw.githubusercontent.com/nosini/open-in-browser/refs/tags/v1.3/bootstrap.sh \
+#     | bash -s -- --ref v1.3 --id <extension-id>
 #
 # The extension's setup page shows this command with both values filled in.
 
-REPOSITORY="${OPEN_IN_BROWSER_REPOSITORY:-https://codeberg.org/nosini/open-in-browser}"
+# Override the raw-file repository base URL, including any owner/repository path.
+REPOSITORY="${OPEN_IN_BROWSER_REPOSITORY:-https://raw.githubusercontent.com/nosini/open-in-browser}"
 FILES=(install.sh native_host.py domains.txt.example)
 
 die() {
@@ -24,7 +25,7 @@ $REPOSITORY
 and runs install.sh with the given extension ID.
 
   --id EXTENSION_ID   ID shown on the extension's setup page. Required.
-  --ref REF           Release tag (v1.2) or branch to download from. Use the
+  --ref REF           Release tag (v1.3) or branch to download from. Use the
                       tag matching the installed extension; defaults to main.
   --profile DIR       Passed through to install.sh. May be repeated.
 EOF
@@ -75,9 +76,9 @@ main() {
   done
 
   # Releases are v-prefixed tags; anything else is taken to be a branch.
-  local kind="branch"
-  [[ "$ref" == v* ]] && kind="tag"
-  local base="$REPOSITORY/raw/$kind/$ref"
+  local kind="heads"
+  [[ "$ref" == v* ]] && kind="tags"
+  local base="$REPOSITORY/refs/$kind/$ref"
 
   local workdir
   workdir="$(mktemp -d)"

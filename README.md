@@ -105,10 +105,10 @@ ID.
 > which gives the extension a new ID. Installed copies won't update to it, and
 > the helper won't accept it until you reinstall with the new ID.
 
-Releases are built by [Forgejo Actions](.forgejo/workflows/pack.yml): pushing
-a tag like `v1.2` tests, packs and signs the extension, then publishes it as a
+Releases are built by [GitHub Actions](.github/workflows/pack.yml): pushing
+a tag like `v1.3` tests, packs and signs the extension, then publishes it as a
 release. The tag must match the `version` in `extension/manifest.json`. See
-[docs/forgejo-actions.md](docs/forgejo-actions.md) for setting up the signing
+[docs/github-actions.md](docs/github-actions.md) for setting up the signing
 key.
 
 ## Tests
@@ -123,4 +123,4 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 [AGPL-3.0](LICENSE)
 
 [native-messaging]: https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
-[latest]: https://codeberg.org/nosini/open-in-browser/releases/latest
+[latest]: https://github.com/nosini/open-in-browser/releases/latest
