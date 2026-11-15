@@ -89,6 +89,3 @@ original signed `.crx` attachments as historical releases rather than rebuilding
 them with a different key. These versions still contain Codeberg URLs; use
 `v1.3` or later for installation entirely from GitHub. Do not move old tags to
 new commits to change those URLs.
-
-The retained [Forgejo workflow](../.forgejo/workflows/pack.yml) is separate from
-GitHub Actions and still uses its original runner, token and signing secret.
