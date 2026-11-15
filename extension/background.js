@@ -2,6 +2,11 @@ const NATIVE_HOST = "open_in_browser";
 
 // ── Native host communication ─────────────────────────────────────────────────
 
+function isHostUnreachable(message) {
+  const text = String(message || "").toLowerCase();
+  return text.includes("native messaging host not found") || text.includes("forbidden");
+}
+
 function callNativeHost(message) {
   return new Promise((resolve, reject) => {
     const port = chrome.runtime.connectNative(NATIVE_HOST);
@@ -25,39 +30,44 @@ function callNativeHost(message) {
 // ── Domain list management ────────────────────────────────────────────────────
 
 // Resolves to { ok, reachable, error?, count? }. `reachable: false` means the
-// native host could not be started at all (not installed, not allowed for this
-// extension ID, or crashed), which only installing it can fix; `reachable:
-// true` with an error means the host ran but its config is broken.
+// native host could not be started at all (not installed or not allowed for
+// this extension ID), which only installing it can fix; `reachable: true`
+// with an error means the host ran but its config is broken.
 async function loadDomains() {
   let response;
   try {
     response = await callNativeHost({ action: "get_domains" });
   } catch (err) {
     console.error("[open-in-browser] Failed to reach the native host:", err.message);
-    return { ok: false, reachable: false, error: err.message };
+    return { ok: false, reachable: !isHostUnreachable(err.message), error: err.message };
   }
 
   try {
     // A native-host error (e.g. missing domains.txt) must not wipe the working
     // config: keep the cached domains, rules, and menus untouched.
-    if (response.error) {
-      console.error("[open-in-browser] Native host error:", response.error);
-      return { ok: false, reachable: true, error: response.error };
+    if (response.status === "error" || response.error) {
+      const error = response.error || "The native host reported an error";
+      console.error("[open-in-browser] Native host error:", error);
+      return { ok: false, reachable: true, error };
     }
 
     const domains = response.domains || [];
     const browsers = response.browsers || {};
 
-    await chrome.storage.local.set({ domains, browsers });
-    console.log(`[open-in-browser] Loaded ${domains.length} domain(s)`);
-
-    // Isolate the rules update so a rejected batch cannot skip menu rebuilding.
+    // Install the block rules first: caching domains before the rules exist
+    // would let onBeforeNavigate match sites the network layer does not block.
     try {
       await updateBlockRules(domains);
     } catch (err) {
       console.error("[open-in-browser] Failed to update block rules:", err.message);
+      return { ok: false, reachable: true, error: `Could not update block rules: ${err.message}` };
     }
-    rebuildContextMenus(browsers);
+
+    await chrome.storage.local.set({ domains, browsers });
+    console.log(`[open-in-browser] Loaded ${domains.length} domain(s)`);
+    rebuildContextMenus(browsers).catch((err) => {
+      console.error("[open-in-browser] Failed to rebuild context menus:", err.message);
+    });
     return { ok: true, reachable: true, count: domains.length };
   } catch (err) {
     console.error("[open-in-browser] Failed to load domains:", err.message);
@@ -162,26 +172,54 @@ async function replaceBlockRules(domains) {
 
 // ── Context menus ─────────────────────────────────────────────────────────────
 
-function rebuildContextMenus(browsers) {
-  chrome.contextMenus.removeAll(() => {
-    const aliases = Object.keys(browsers);
-    if (aliases.length === 0) return;
+let contextMenusUpdate = Promise.resolve();
 
-    chrome.contextMenus.create({
-      id: "open-in-browser-parent",
-      title: "Open in Browser",
+function rebuildContextMenus(browsers) {
+  // Serialize like the rule update: overlapping removals would otherwise let a
+  // second create() batch hit the first batch's IDs and fail with "duplicate id".
+  const update = contextMenusUpdate.then(() => replaceContextMenus(browsers));
+  contextMenusUpdate = update.catch(() => {});
+  return update;
+}
+
+function createContextMenu(details) {
+  return new Promise((resolve) => {
+    chrome.contextMenus.create(details, () => {
+      if (chrome.runtime.lastError) {
+        console.error("[open-in-browser] Failed to create context menu:", chrome.runtime.lastError.message);
+      }
+      resolve();
+    });
+  });
+}
+
+async function replaceContextMenus(browsers) {
+  await new Promise((resolve) => {
+    chrome.contextMenus.removeAll(() => {
+      if (chrome.runtime.lastError) {
+        console.error("[open-in-browser] Failed to remove context menus:", chrome.runtime.lastError.message);
+      }
+      resolve();
+    });
+  });
+
+  const aliases = Object.keys(browsers);
+  if (aliases.length === 0) return;
+
+  await createContextMenu({
+    id: "open-in-browser-parent",
+    title: "Open in Browser",
+    contexts: ["link"],
+  });
+
+  for (const alias of aliases) {
+    await createContextMenu({
+      id: `open-in-browser:${alias}`,
+      parentId: "open-in-browser-parent",
+      title: alias.charAt(0).toUpperCase() + alias.slice(1),
       contexts: ["link"],
     });
-
-    for (const alias of aliases) {
-      chrome.contextMenus.create({
-        id: `open-in-browser:${alias}`,
-        parentId: "open-in-browser-parent",
-        title: alias.charAt(0).toUpperCase() + alias.slice(1),
-        contexts: ["link"],
-      });
-    }
-  });
+  }
 }
 
 chrome.contextMenus.onClicked.addListener(async (info) => {
@@ -189,17 +227,20 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 
   const alias = info.menuItemId.replace("open-in-browser:", "");
   const browsers = await getCachedBrowsers();
-  const browser = browsers[alias];
 
-  if (!browser) {
+  if (!browsers[alias]) {
     console.error(`[open-in-browser] Unknown browser alias: ${alias}`);
     return;
   }
 
   const url = info.linkUrl;
+  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return;
 
   try {
-    await callNativeHost({ action: "open", url, browser });
+    const response = await callNativeHost({ action: "open", url, browser: alias });
+    if (response.status === "error" || response.error) {
+      throw new Error(response.error || "The native host reported an error");
+    }
   } catch (err) {
     console.error("[open-in-browser] Failed to open browser:", err.message);
   }
@@ -208,19 +249,121 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 // ── Matching logic ────────────────────────────────────────────────────────────
 
 function matchDomain(hostname, domains) {
+  // Most specific entry wins: work.example.com beats example.com even when the
+  // broader entry appears first in domains.txt.
+  let best = null;
   for (const entry of domains) {
     if (hostname === entry.domain || hostname.endsWith("." + entry.domain)) {
-      return entry.browser;
+      if (!best || entry.domain.length > best.domain.length) best = entry;
     }
   }
-  return null;
+  return best;
+}
+
+function isHttpUrl(url) {
+  return typeof url === "string" && /^https?:\/\//i.test(url);
 }
 
 // ── Firefox hand-off ──────────────────────────────────────────────────────────
 //
 // The actual connection is already blocked by the DNR rules in updateBlockRules();
-// this listener only reacts to the same navigation to launch the other browser and
-// dispose of the (blocked) tab. Its async timing no longer affects privacy.
+// these listeners only react to the same navigation to launch the other browser
+// and dispose of the (blocked) tab. Their async timing no longer affects privacy.
+
+const HANDOFF_WINDOW_MS = 5000;
+const recentNavigations = new Map();
+const restoredTabs = new Set();
+
+// Claim a tabId+URL pair so onBeforeNavigate and onErrorOccurred cannot hand off
+// the same navigation twice (a redirect, or a blocked fetch after onBeforeNavigate).
+function claimNavigation(tabId, url) {
+  const key = `${tabId}\n${url}`;
+  const now = Date.now();
+  for (const [oldKey, time] of recentNavigations) {
+    if (now - time > HANDOFF_WINDOW_MS) recentNavigations.delete(oldKey);
+  }
+  if (recentNavigations.has(key)) return false;
+  recentNavigations.set(key, now);
+  return true;
+}
+
+// On startup, tabs restored by "continue where you left off" already existed
+// before this extension saw them. Their first navigation is not a user click.
+function skipRestoredTab(tabId) {
+  if (!restoredTabs.has(tabId)) return false;
+  restoredTabs.delete(tabId);
+  return true;
+}
+
+// ── Committed tabs (chrome.storage.session survives worker restarts) ──────────
+
+async function getCommittedTabs() {
+  const { committedTabs } = await chrome.storage.session.get("committedTabs");
+  return new Set(committedTabs || []);
+}
+
+async function isTabCommitted(tabId) {
+  return (await getCommittedTabs()).has(String(tabId));
+}
+
+async function markTabCommitted(tabId) {
+  const committed = await getCommittedTabs();
+  committed.add(String(tabId));
+  await chrome.storage.session.set({ committedTabs: [...committed] });
+}
+
+async function clearTabCommitted(tabId) {
+  const committed = await getCommittedTabs();
+  if (committed.delete(String(tabId))) {
+    await chrome.storage.session.set({ committedTabs: [...committed] });
+  }
+}
+
+async function handOff(tabId, url) {
+  // Hand off first; only discard the tab once the other browser actually opened.
+  // On failure the tab stays on the DNR-blocked error page, preserving the URL.
+  try {
+    const response = await callNativeHost({ action: "open", url });
+    if (response.status === "error" || response.error) {
+      throw new Error(response.error || "The native host reported an error");
+    }
+  } catch (err) {
+    console.error("[open-in-browser] Failed to open browser:", err.message);
+    return;
+  }
+
+  try {
+    // A tab with an earlier page (search results, a half-written form) is left
+    // alone: go back to that page instead of destroying the user's history.
+    if (await isTabCommitted(tabId)) {
+      if (typeof chrome.tabs.goBack === "function") {
+        try {
+          await chrome.tabs.goBack(tabId);
+        } catch (err) {
+          console.error("[open-in-browser] Could not go back in the tab:", err.message);
+        }
+      }
+      return;
+    }
+
+    // Closing the only tab of the last window would quit the browser.
+    const tabs = await chrome.tabs.query({});
+    if (tabs.length <= 1) return;
+    await chrome.tabs.remove(tabId);
+  } catch (err) {
+    console.error("[open-in-browser] Failed to tidy up the tab:", err.message);
+  }
+}
+
+chrome.webNavigation.onCommitted.addListener(async (details) => {
+  if (details.frameId !== 0) return;
+  await markTabCommitted(details.tabId);
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  restoredTabs.delete(tabId);
+  await clearTabCommitted(tabId);
+});
 
 chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   // Prerender/speculative navigations reuse the hosting tab's tabId; acting on
@@ -228,7 +371,13 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   // click. DNR already blocks those fetches, so ignore anything not "active".
   if (details.documentLifecycle && details.documentLifecycle !== "active") return;
   if (details.frameId !== 0) return;
-  if (!details.url.startsWith("http")) return;
+  if (!isHttpUrl(details.url)) return;
+
+  if (skipRestoredTab(details.tabId)) {
+    // Suppress the matching onErrorOccurred for this blocked first navigation.
+    claimNavigation(details.tabId, details.url);
+    return;
+  }
 
   const domains = await getCachedDomains();
   if (domains.length === 0) return;
@@ -240,17 +389,36 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
     return;
   }
 
-  const browser = matchDomain(hostname, domains);
-  if (!browser) return;
+  if (!matchDomain(hostname, domains)) return;
+  if (!claimNavigation(details.tabId, details.url)) return;
+  await handOff(details.tabId, details.url);
+});
 
-  // Hand off first; only discard the tab once the other browser actually opened.
-  // On failure the tab stays on the DNR-blocked error page, preserving the URL.
-  try {
-    await callNativeHost({ action: "open", url: details.url, browser });
-    chrome.tabs.remove(details.tabId);
-  } catch (err) {
-    console.error("[open-in-browser] Failed to open browser:", err.message);
+chrome.webNavigation.onErrorOccurred.addListener(async (details) => {
+  // A server redirect can land on a blocked domain without onBeforeNavigate
+  // seeing the final URL; the DNR block still reports this error for it.
+  if (details.frameId !== 0) return;
+  if (details.error !== "net::ERR_BLOCKED_BY_CLIENT") return;
+  if (!isHttpUrl(details.url)) return;
+
+  if (skipRestoredTab(details.tabId)) {
+    claimNavigation(details.tabId, details.url);
+    return;
   }
+
+  const domains = await getCachedDomains();
+  if (domains.length === 0) return;
+
+  let hostname;
+  try {
+    hostname = new URL(details.url).hostname;
+  } catch {
+    return;
+  }
+
+  if (!matchDomain(hostname, domains)) return;
+  if (!claimNavigation(details.tabId, details.url)) return;
+  await handOff(details.tabId, details.url);
 });
 
 // ── Setup page ────────────────────────────────────────────────────────────────
@@ -260,7 +428,25 @@ chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
 // single command to paste into a terminal.
 
 function openSetupPage() {
-  chrome.tabs.create({ url: chrome.runtime.getURL("setup.html") });
+  const url = chrome.runtime.getURL("setup.html");
+  // Matching by url works for the extension's own pages without the tabs
+  // permission. Re-use an open setup tab instead of stacking duplicates.
+  chrome.tabs.query({ url }, (tabs) => {
+    if (chrome.runtime.lastError) {
+      console.error("[open-in-browser] Could not look for the setup page:", chrome.runtime.lastError.message);
+      chrome.tabs.create({ url });
+      return;
+    }
+    if (tabs.length > 0) {
+      chrome.tabs.update(tabs[0].id, { active: true }, () => {
+        if (chrome.runtime.lastError) {
+          console.error("[open-in-browser] Could not focus the setup page:", chrome.runtime.lastError.message);
+        }
+      });
+    } else {
+      chrome.tabs.create({ url });
+    }
+  });
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -274,13 +460,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   const status = await loadDomains();
   // Also covers updates across a host rename. Browser updates are left alone:
-  // popping a tab after every browser update would be noise.
+  // popping a tab after every browser update would be noise. Config errors are
+  // reported by the icon click or setup page, not treated as a missing install.
   if (!status.reachable && (reason === "install" || reason === "update")) {
     openSetupPage();
   }
 });
 
-chrome.runtime.onStartup.addListener(loadDomains);
+chrome.runtime.onStartup.addListener(async () => {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) restoredTabs.add(tab.id);
+  await loadDomains();
+});
 
 chrome.action.onClicked.addListener(async () => {
   // A click is an explicit request, so explain any failure, config included.

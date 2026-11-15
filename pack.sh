@@ -12,7 +12,7 @@ CRX_OUT="$SCRIPT_DIR/open-in-browser.crx"
 
 for tool in python3 openssl; do
   if ! command -v "$tool" &>/dev/null; then
-    echo "Error: $tool is required but was not found."
+    echo "Error: $tool is required but was not found." >&2
     exit 1
   fi
 done
@@ -42,5 +42,5 @@ echo "Extension ID (derived from $KEY_FILE):"
 echo "  $EXT_ID"
 echo ""
 echo "Register the native host for this ID with every browser installed:"
-echo "  $SCRIPT_DIR/install.sh"
+echo "  $SCRIPT_DIR/install.sh --id $EXT_ID"
 echo ""

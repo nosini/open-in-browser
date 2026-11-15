@@ -7,7 +7,6 @@
     "nativeMessaging",
     "declarativeNetRequest",
     "webNavigation",
-    "tabs",
     "storage",
     "contextMenus"
   ],

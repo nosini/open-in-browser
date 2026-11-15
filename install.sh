@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/open-in-browser"
 HOST_PATH="$BIN_DIR/$HOST_COMMAND"
+KEY_FILE="${EXTENSION_KEY_FILE:-$SCRIPT_DIR/extension.pem}"
 
 EXTENSION_ID=""
 EXTRA_DIRS=()
@@ -25,10 +26,10 @@ Installs the native messaging host into
   $BIN_DIR
 and registers it with every Chromium-based browser found on this system.
 
-  --id EXTENSION_ID    Extension ID allowed to talk to the host. Defaults to
-                       the ID derived from extension.pem when that key exists;
-                       otherwise a placeholder is written and you re-run this
-                       script with --id once the browser shows the real ID.
+  --id EXTENSION_ID    Extension ID allowed to talk to the host. Without it,
+                       an existing registration keeps its allowed ID; otherwise
+                       the ID is derived from EXTENSION_KEY_FILE (default:
+                       extension.pem). Pass --id if neither exists.
   --profile DIR        Extra Chromium user data directory to register with,
                        for a browser that has not been launched yet or uses a
                        custom --user-data-dir. May be repeated.
@@ -72,12 +73,13 @@ fi
 
 # An ID passed in came from the extension itself (its setup page, or the
 # extensions page), so the extension is already installed.
-ID_FROM_EXTENSION="${EXTENSION_ID:+yes}"
-
-if [[ -z "$EXTENSION_ID" && -f "$SCRIPT_DIR/extension.pem" ]]; then
+ID_FROM_EXTENSION=""
+if [[ -n "$EXTENSION_ID" ]]; then
+  ID_FROM_EXTENSION="yes"
+elif [[ -f "$KEY_FILE" ]]; then
   # The ID is a hash of the signing key's public half, so the packed .crx and
   # this manifest agree without the browser having to be consulted.
-  EXTENSION_ID="$(python3 "$SCRIPT_DIR/crx3.py" --id "$SCRIPT_DIR/extension.pem" 2>/dev/null || true)"
+  EXTENSION_ID="$(python3 "$SCRIPT_DIR/crx3.py" --id "$KEY_FILE" 2>/dev/null || true)"
 fi
 
 if [[ -n "$EXTENSION_ID" && ! "$EXTENSION_ID" =~ ^[a-p]{32}$ ]]; then
@@ -85,19 +87,14 @@ if [[ -n "$EXTENSION_ID" && ! "$EXTENSION_ID" =~ ^[a-p]{32}$ ]]; then
   exit 1
 fi
 
-PLACEHOLDER=""
-if [[ -z "$EXTENSION_ID" ]]; then
-  EXTENSION_ID="EXTENSION_ID_HERE"
-  PLACEHOLDER="yes"
-fi
-
 # ── Find Chromium-based browsers ──────────────────────────────────────────────
 
 # Every Chromium derivative keeps a "user data directory" holding a `Local
-# State` file and a `Default` profile, and reads native messaging manifests
-# from `NativeMessagingHosts` inside it. Detecting that layout covers Chrome,
-# Chromium, Brave (including Brave Origin), Vivaldi, Opera and Edge, their beta
-# and nightly channels, and Flatpak copies, without hardcoding any of them.
+# State` file and at least one `Default` or `Profile N` directory, and reads
+# native messaging manifests from `NativeMessagingHosts` inside it. Detecting
+# that layout covers Chrome, Chromium, Brave (including Brave Origin), Vivaldi,
+# Opera and Edge, their beta and nightly channels, and Flatpak copies, without
+# hardcoding any of them.
 find_user_data_dirs() {
   local config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
   [[ -d "$config_home" ]] && find "$config_home" -maxdepth 4 -name "Local State" -type f -printf '%h\n' 2>/dev/null
@@ -108,7 +105,14 @@ find_user_data_dirs() {
 
 TARGETS=()
 while IFS= read -r dir; do
-  [[ -d "$dir/Default" ]] || continue
+  has_profile=""
+  for profile in "$dir"/Default "$dir"/Profile\ *; do
+    if [[ -d "$profile" ]]; then
+      has_profile="yes"
+      break
+    fi
+  done
+  [[ -n "$has_profile" ]] || continue
   TARGETS+=("$dir")
 done < <(find_user_data_dirs | sort -u)
 
@@ -117,10 +121,46 @@ for dir in ${EXTRA_DIRS+"${EXTRA_DIRS[@]}"}; do
 done
 
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
-  echo "Error: no Chromium-based browser profile found."
-  echo "       Launch the browser once so it creates its profile, then re-run"
-  echo "       this script, or pass the directory with --profile."
+  echo "Error: no Chromium-based browser profile found." >&2
+  echo "       Launch the browser once so it creates its profile, then re-run" >&2
+  echo "       this script, or pass the directory with --profile." >&2
   exit 1
+fi
+
+# Reads the allowed_origins already registered for a browser, if any.
+existing_origins() {
+  local manifest="$1"
+  [[ -f "$manifest" ]] || return 0
+  python3 - "$manifest" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as file:
+        data = json.load(file)
+except Exception:
+    raise SystemExit(0)
+
+origins = data.get("allowed_origins")
+if isinstance(origins, list):
+    for origin in origins:
+        if isinstance(origin, str):
+            print(origin)
+PY
+}
+
+# Without --id, every browser must either keep an existing registration or have
+# a key to derive one from. Fail before writing anything rather than leave a
+# placeholder that can never connect.
+if [[ -z "$ID_FROM_EXTENSION" && -z "$EXTENSION_ID" ]]; then
+  for user_data_dir in "${TARGETS[@]}"; do
+    if [[ -z "$(existing_origins "$user_data_dir/NativeMessagingHosts/$HOST_NAME.json")" ]]; then
+      echo "Error: no --id given, and no existing host registration to reuse." >&2
+      echo "       Pass --id <extension-id> from the extension's setup page," >&2
+      echo "       or set EXTENSION_KEY_FILE to the signing key that produced it." >&2
+      exit 1
+    fi
+  done
 fi
 
 # ── Install the native host ───────────────────────────────────────────────────
@@ -133,15 +173,33 @@ echo "==> Registering with browsers:"
 for user_data_dir in "${TARGETS[@]}"; do
   hosts_dir="$user_data_dir/NativeMessagingHosts"
   mkdir -p "$hosts_dir"
-  cat > "$hosts_dir/$HOST_NAME.json" << EOF
-{
-  "name": "$HOST_NAME",
-  "description": "Opens configured domains in another browser",
-  "path": "$HOST_PATH",
-  "type": "stdio",
-  "allowed_origins": ["chrome-extension://$EXTENSION_ID/"]
-}
-EOF
+  manifest="$hosts_dir/$HOST_NAME.json"
+
+  origins=()
+  if [[ -z "$ID_FROM_EXTENSION" ]]; then
+    while IFS= read -r origin; do
+      [[ -n "$origin" ]] && origins+=("$origin")
+    done < <(existing_origins "$manifest")
+  fi
+  if [[ ${#origins[@]} -eq 0 ]]; then
+    origins=("chrome-extension://$EXTENSION_ID/")
+  fi
+
+  # json.dumps keeps paths containing quotes or backslashes valid.
+  python3 - "$HOST_NAME" "$HOST_PATH" "${origins[@]}" > "$manifest" <<'PY'
+import json
+import sys
+
+json.dump({
+    "name": sys.argv[1],
+    "description": "Opens configured domains in another browser",
+    "path": sys.argv[2],
+    "type": "stdio",
+    "allowed_origins": sys.argv[3:],
+}, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PY
+
   echo "    ${user_data_dir/#$HOME/\~}"
   if [[ "$user_data_dir" == "$HOME/.var/app/"* ]]; then
     echo "      (Flatpak: the sandbox usually cannot start programs outside it)"
@@ -188,15 +246,11 @@ else
   echo "   or use 'Load unpacked' and select $SCRIPT_DIR/extension"
   echo ""
 
-  if [[ -n "$PLACEHOLDER" ]]; then
-    echo "The extension ID is not known yet, so the host will refuse connections."
-    echo "The extension opens a setup page with a command that fills it in;"
-    echo "or copy the ID shown under the extension name and run:"
-    echo ""
-    echo "  $SCRIPT_DIR/install.sh --id <extension-id>"
-  else
+  if [[ -n "$EXTENSION_ID" ]]; then
     echo "Allowed extension ID: $EXTENSION_ID"
     echo "'Load unpacked' produces a different ID; re-run with --id if you use it."
+  else
+    echo "Kept the existing extension registration."
   fi
 fi
 

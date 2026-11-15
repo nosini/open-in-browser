@@ -9,6 +9,7 @@ import shlex
 import struct
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 CONFIG_DIR_NAME = "open-in-browser"
 
@@ -140,48 +141,141 @@ def parse_domains_file():
     return aliases, entries, None
 
 
+def match_domain(hostname, entries):
+    """
+    Return the most specific entry matching hostname, or None. A domain also
+    matches its subdomains; the longest matching domain wins.
+    """
+    best = None
+    for entry in entries:
+        domain = entry["domain"]
+        if hostname == domain or hostname.endswith("." + domain):
+            if best is None or len(domain) > len(best["domain"]):
+                best = entry
+    return best
+
+
+def resolve_browser(browser, aliases):
+    """
+    Resolve the first word of a browser field as an alias, appending any extra
+    arguments after the alias's command. Fields that do not start with a known
+    alias are commands from domains.txt and are used as-is.
+    """
+    parts = shlex.split(browser)
+    if parts and parts[0] in aliases:
+        return " ".join([aliases[parts[0]], *(shlex.quote(part) for part in parts[1:])])
+    return browser
+
+
 def open_in_browser(url, browser):
-    """Launch the given browser with url, detached from this process."""
+    """
+    Launch the given browser with url, detached from this process. stdin and
+    stdout are the native-messaging pipe, so the child must not inherit them.
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Only http and https URLs can be opened.")
     command = shlex.split(browser)
+    if not command:
+        raise ValueError("no browser command configured")
     command.append(url)
-    subprocess.Popen(
+    process = subprocess.Popen(
         command,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
+    # Catch commands that fail immediately (a missing Flatpak app, a wrapper
+    # that exits 1). A browser that stays running is handed off successfully.
+    try:
+        returncode = process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        return
+    if returncode != 0:
+        raise RuntimeError(f"browser command exited with status {returncode}")
 
 
-def main():
-    message = read_message()
-    if not message:
-        sys.exit(0)
-
+def handle_message(message):
     action = message.get("action")
 
     if action == "get_domains":
         aliases, entries, error = parse_domains_file()
+        if error:
+            send_message({"status": "error", "error": error})
+            return
         resolved = [
-            {"domain": e["domain"], "browser": aliases.get(e["browser"], e["browser"])}
+            {"domain": e["domain"], "browser": resolve_browser(e["browser"], aliases)}
             for e in entries
         ]
-        payload = {
+        send_message({
             "domains": resolved,
             "browsers": aliases,
-        }
-        if error:
-            payload["error"] = error
-        send_message(payload)
+        })
 
     elif action == "open":
-        url = message.get("url", "")
-        browser = message.get("browser", "firefox")
-        if url:
-            open_in_browser(url, browser)
-        send_message({"status": "ok"})
+        handle_open(message)
 
     else:
-        send_message({"error": f"Unknown action: {action}"})
+        send_message({"status": "error", "error": f"Unknown action: {action}"})
+
+
+def handle_open(message):
+    url = message.get("url", "")
+    if not isinstance(url, str) or not url.strip():
+        send_message({"status": "error", "error": "No URL given."})
+        return
+    url = url.strip()
+
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        send_message({"status": "error", "error": "Only http and https URLs can be opened."})
+        return
+
+    aliases, entries, error = parse_domains_file()
+    if error:
+        send_message({"status": "error", "error": error})
+        return
+
+    # The extension may name a [browsers] alias; anything else is rejected
+    # rather than executed as a caller-supplied command.
+    alias = message.get("browser")
+    if alias:
+        if not isinstance(alias, str) or alias not in aliases:
+            send_message({"status": "error", "error": f"Unknown browser alias: {alias}"})
+            return
+        command = aliases[alias]
+    else:
+        entry = match_domain(parsed.hostname.lower(), entries)
+        if not entry:
+            send_message({
+                "status": "error",
+                "error": f"No browser configured for {parsed.hostname}",
+            })
+            return
+        command = resolve_browser(entry["browser"], aliases)
+
+    try:
+        open_in_browser(url, command)
+    except Exception as error:
+        send_message({"status": "error", "error": str(error)})
+    else:
+        send_message({"status": "ok"})
+
+
+def main():
+    try:
+        message = read_message()
+        if not message:
+            return
+        handle_message(message)
+    except Exception as error:
+        # Config/read errors must be reported to the extension, not left as a
+        # crash that looks like a missing installation.
+        try:
+            send_message({"status": "error", "error": str(error)})
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ REPOSITORY = Path(__file__).resolve().parent.parent
 EXTENSION_ID = "abcdefghijklmnopabcdefghijklmnop"
 
 # Refs the fake raw-file server knows about; everything else is a 404.
-KNOWN_REFS = {("tags", "v1.3"), ("heads", "main")}
+KNOWN_REFS = {("tags", "v1.3"), ("heads", "main"), ("heads", "vivaldi-fix")}
 
 
 class RawFiles(BaseHTTPRequestHandler):
@@ -58,23 +58,32 @@ class BootstrapTests(unittest.TestCase):
         workspace = tempfile.TemporaryDirectory()
         self.addCleanup(workspace.cleanup)
         self.home = Path(workspace.name) / "home"
-        profile = self.home / ".config" / "chromium"
-        (profile / "Default").mkdir(parents=True)
-        (profile / "Local State").write_text("{}")
-        self.manifest = profile / "NativeMessagingHosts" / "open_in_browser.json"
+        self.profile = self.home / ".config" / "chromium"
+        (self.profile / "Default").mkdir(parents=True)
+        (self.profile / "Local State").write_text("{}")
+        self.manifest = self.profile / "NativeMessagingHosts" / "open_in_browser.json"
         self.host = self.home / ".local" / "bin" / "open-in-browser-host"
         self.config = self.home / ".config" / "open-in-browser" / "domains.txt"
         # A private TMPDIR shows whether the download directory is cleaned up.
         self.tmp = Path(workspace.name) / "tmp"
         self.tmp.mkdir()
 
-    def environment(self):
-        return {
+    def environment(self, **extra):
+        environment = {
             "PATH": os.environ["PATH"],
             "HOME": str(self.home),
             "TMPDIR": str(self.tmp),
             "OPEN_IN_BROWSER_REPOSITORY": self.url,
         }
+        environment.update(extra)
+        return environment
+
+    def install(self, *arguments, environment=None):
+        return subprocess.run(
+            ["bash", str(REPOSITORY / "install.sh"), *arguments],
+            env=environment or self.environment(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60,
+        )
 
     def bootstrap(self, *arguments, piped=False):
         script = REPOSITORY / "bootstrap.sh"
@@ -128,7 +137,83 @@ class BootstrapTests(unittest.TestCase):
 
     def test_run_from_a_file_and_branch_refs(self):
         self.assert_installed(self.bootstrap("--id", EXTENSION_ID, "--ref", "main"))
-        self.assertTrue(all(path.startswith("/refs/heads/main/") for path in RawFiles.requests))
+        heads = [path for path in RawFiles.requests if path.startswith("/refs/heads/main/")]
+        self.assertEqual(len(heads), 3)
+        self.assertTrue(all(
+            path.startswith(("/refs/tags/main/", "/refs/heads/main/")) for path in RawFiles.requests
+        ))
+
+    def test_a_branch_starting_with_v_falls_back_from_tags(self):
+        self.assert_installed(self.bootstrap("--id", EXTENSION_ID, "--ref", "vivaldi-fix"))
+        self.assertIn("/refs/tags/vivaldi-fix/install.sh", RawFiles.requests)
+        self.assertIn("/refs/heads/vivaldi-fix/install.sh", RawFiles.requests)
+
+    def test_without_an_id_an_existing_registration_is_kept(self):
+        self.manifest.parent.mkdir(parents=True)
+        self.manifest.write_text(json.dumps({
+            "name": "open_in_browser",
+            "description": "old",
+            "path": "/old/path",
+            "type": "stdio",
+            "allowed_origins": [f"chrome-extension://{EXTENSION_ID}/"],
+        }))
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.manifest.read_text())["allowed_origins"], [
+            f"chrome-extension://{EXTENSION_ID}/",
+        ])
+        self.assertIn("Kept the existing extension registration.", result.stdout)
+
+    def test_without_an_id_or_registration_it_fails_instead_of_writing_a_placeholder(self):
+        environment = self.environment(EXTENSION_KEY_FILE=str(self.home / "missing.pem"))
+        result = self.install(environment=environment)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no --id given", result.stderr)
+        self.assertIn("--id <extension-id>", result.stderr)
+        self.assertNotIn("EXTENSION_ID_HERE", result.stdout + result.stderr)
+        self.assertFalse(self.manifest.exists())
+        self.assertFalse(self.host.exists())
+
+    @unittest.skipUnless(shutil.which("openssl"), "generating a test signing key needs openssl")
+    def test_extension_key_file_is_used_when_there_is_no_registration(self):
+        key = self.home / "keys" / "custom.pem"
+        key.parent.mkdir(parents=True)
+        subprocess.run(
+            ["openssl", "genrsa", "-out", str(key), "2048"],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        expected = subprocess.check_output(
+            ["python3", str(REPOSITORY / "crx3.py"), "--id", str(key)], text=True
+        ).strip()
+        result = self.install(environment=self.environment(EXTENSION_KEY_FILE=str(key)))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.manifest.read_text())["allowed_origins"], [
+            f"chrome-extension://{expected}/",
+        ])
+
+    def test_a_profile_n_directory_is_detected_without_default(self):
+        shutil.rmtree(self.profile / "Default")
+        (self.profile / "Profile 1").mkdir()
+        result = self.install("--id", EXTENSION_ID)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.manifest.exists())
+
+    def test_missing_profile_error_goes_to_stderr(self):
+        shutil.rmtree(self.profile / "Default")
+        result = self.install("--id", EXTENSION_ID)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("no Chromium-based browser profile found", result.stderr)
+
+    def test_manifest_path_is_json_escaped(self):
+        bin_dir = self.home / 'bin"with\\tricky'
+        result = self.install(
+            "--id", EXTENSION_ID,
+            environment=self.environment(XDG_BIN_HOME=str(bin_dir)),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads(self.manifest.read_text())
+        self.assertEqual(manifest["path"], str(bin_dir / "open-in-browser-host"))
 
     def test_a_missing_release_installs_nothing(self):
         result = self.bootstrap("--ref", "v9.9", "--id", EXTENSION_ID)

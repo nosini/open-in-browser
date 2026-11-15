@@ -34,7 +34,7 @@ class FakeElement {
 }
 
 // Loads setup.js with `reply` as the background's answer to "check-host".
-async function page(reply) {
+async function page(reply, manifest = { version: "1.3" }) {
   const elements = {};
   const windowListeners = {};
   const clipboard = [];
@@ -43,7 +43,7 @@ async function page(reply) {
     chrome: {
       runtime: {
         id: EXTENSION_ID,
-        getManifest: () => ({ version: "1.3" }),
+        getManifest: () => manifest,
         async sendMessage(message) {
           // Clone out of the VM's realm so strict deep equality can compare it.
           sent.push(structuredClone(message));
@@ -86,6 +86,11 @@ test("a missing host shows the install command with the browser's reason", async
   assert.match(state.element("status").textContent, /not installed.*Specified native messaging host not found\./);
 });
 
+test("the setup page also shows the checkout install command", async () => {
+  const state = await page({ ok: false, reachable: false, error: "not found" });
+  assert.equal(state.element("checkout-command").textContent, `./install.sh --id ${EXTENSION_ID}`);
+});
+
 test("a working host hides the install steps", async () => {
   const state = await page({ ok: true, reachable: true, count: 3 });
   assert.equal(state.element("install").hidden, true);
@@ -110,8 +115,18 @@ test("returning to the page checks again", async () => {
   assert.equal(state.sent.length, 3);
 });
 
-test("a failed check is reported instead of leaving the page pending", async () => {
+test("a failed check is reported and keeps the install command visible", async () => {
   const state = await page(new Error("Could not establish connection"));
   assert.equal(state.element("status").className, "status error");
   assert.match(state.element("status").textContent, /Could not establish connection/);
+  assert.equal(state.element("install").hidden, false);
+  assert.equal(state.element("configure").hidden, true);
+});
+
+test("an empty check response is treated as a failed check", async () => {
+  const state = await page(undefined);
+  assert.equal(state.element("status").className, "status error");
+  assert.match(state.element("status").textContent, /did not answer/);
+  assert.equal(state.element("install").hidden, false);
+  assert.equal(state.element("configure").hidden, true);
 });

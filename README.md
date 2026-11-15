@@ -12,11 +12,14 @@ have set up.
 
 An extension can't launch programs, so there are two parts:
 
-- **The extension** watches navigations. For a configured domain, it blocks
-  the request with a `declarativeNetRequest` rule before any DNS lookup or
-  connection happens, then asks the helper to open the URL elsewhere. The tab
-  is closed only after the other browser has launched. If the launch fails, the
-  tab stays on the blocked page so the URL isn't lost.
+- **The extension** watches navigations and blocked requests. For a configured
+  domain, it blocks the request with a `declarativeNetRequest` rule before any
+  DNS lookup or connection happens, then asks the helper to open the URL
+  elsewhere. It also catches server redirects that land on a configured domain.
+  A tab with no earlier page is closed only after the other browser has
+  launched; a tab that already showed another page is left there, going back
+  where possible. If the launch fails, the tab stays on the blocked page so the
+  URL isn't lost.
 - **The helper** (`native_host.py`, installed as
   `~/.local/bin/open-in-browser-host`) is a small Python program. The browser
   starts it through [native messaging][native-messaging]. It reads your
@@ -25,6 +28,9 @@ An extension can't launch programs, so there are two parts:
 Only top-level page loads are blocked. Images, iframes and requests from other
 sites to a configured domain are not, since blocking those would break pages
 that embed them.
+
+Only `http` and `https` links are handed off. Tabs restored at startup are not
+treated as new clicks.
 
 ## Requirements
 
@@ -49,7 +55,7 @@ The command downloads `install.sh` and `native_host.py` from the release
 matching your extension, installs the helper, and registers it with every
 Chromium-based browser on your system. The helper only accepts connections
 from your extension's ID. If you run the command again, your existing
-configuration is kept.
+configuration and extension registration are kept.
 
 You can reopen the setup page any time from the extension's **Options**. It
 also opens by itself when clicking the extension icon fails.
@@ -61,10 +67,19 @@ also opens by itself when clicking the extension icon fails.
 ```
 
 `--id` sets which extension may use the helper. It's shown on the setup page
-and on the extensions page. Without `--id`, the script derives the ID from
-`extension.pem` if that file exists. Use `--profile DIR` for a browser whose
-profile it doesn't find by itself, such as one that has never been launched or
-one using a custom `--user-data-dir`. Run `./install.sh --help` for details.
+and on the extensions page. Without `--id`, an existing browser registration
+keeps its allowed extension ID; if there is none, the script derives the ID
+from `EXTENSION_KEY_FILE` (default: `extension.pem`). If neither exists it
+stops and asks for `--id` instead of writing a placeholder that can never
+connect.
+
+Use `--profile DIR` for a browser whose profile it doesn't find by itself,
+such as one that has never been launched or one using a custom
+`--user-data-dir`. Run `./install.sh --help` for details.
+
+If the extension was loaded unpacked and its version has no release tag yet,
+the setup page also shows the `./install.sh --id <extension-id>` command to run
+from a checkout.
 
 ## Configure
 
@@ -87,6 +102,11 @@ news.example
 
 - A domain also matches its subdomains: `example.com` covers
   `sub.example.com`. A leading `*.` or `.` is ignored.
+- When more than one entry matches, the most specific domain wins:
+  `work.example.com` is used before `example.com`.
+- Only `http` and `https` URLs are opened.
+- The helper resolves the browser from this file itself; the extension can
+  only name an alias, never supply a command.
 - Commands are split like a shell command line, so you can quote arguments
   that contain spaces.
 - `#` starts a comment, both on its own line and after an entry.

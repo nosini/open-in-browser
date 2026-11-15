@@ -8,7 +8,8 @@ function installCommand(extensionId, version) {
   return `curl -fsSL ${RAW_REPOSITORY}/refs/tags/${ref}/bootstrap.sh | bash -s -- --ref ${ref} --id ${extensionId}`;
 }
 
-const { version } = chrome.runtime.getManifest();
+const manifest = chrome.runtime.getManifest();
+const { version } = manifest;
 const command = installCommand(chrome.runtime.id, version);
 
 const element = (id) => document.getElementById(id);
@@ -16,6 +17,7 @@ element("extension-id").textContent = chrome.runtime.id;
 element("version").textContent = version;
 element("command").textContent = command;
 element("source").href = `${REPOSITORY}/tree/v${version}`;
+element("checkout-command").textContent = `./install.sh --id ${chrome.runtime.id}`;
 
 // Host-supplied text only ever goes through textContent, never innerHTML.
 function showStatus(kind, message, detail) {
@@ -38,6 +40,9 @@ async function check() {
   showStatus("pending", "Checking the helper app…");
   try {
     const result = await chrome.runtime.sendMessage({ action: "check-host" });
+    if (!result || typeof result !== "object") {
+      throw new Error("The background page did not answer.");
+    }
     element("install").hidden = result.reachable;
     element("configure").hidden = !result.reachable;
     if (result.ok) {
@@ -48,6 +53,10 @@ async function check() {
       showStatus("error", "The helper app is not installed, or cannot be started.", result.error);
     }
   } catch (err) {
+    // Without an answer we cannot rule out a missing helper, so keep the install
+    // command visible next to the error instead of leaving only a dead end.
+    element("install").hidden = false;
+    element("configure").hidden = true;
     showStatus("error", "Could not check the helper app.", err.message);
   } finally {
     checking = false;

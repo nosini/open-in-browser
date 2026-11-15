@@ -75,22 +75,34 @@ main() {
     command -v "$tool" &>/dev/null || die "$tool is required but was not found."
   done
 
-  # Releases are v-prefixed tags; anything else is taken to be a branch.
-  local kind="heads"
-  [[ "$ref" == v* ]] && kind="tags"
-  local base="$REPOSITORY/refs/$kind/$ref"
-
+  # A --ref may be a tag or a branch; the leading "v" does not tell them apart.
   local workdir
   workdir="$(mktemp -d)"
   # shellcheck disable=SC2064  # expand now: workdir is local to main
   trap "rm -rf -- '$workdir'" EXIT
 
+  # Try refs/tags/<ref> first, then refs/heads/<ref> if the tag is missing.
+  # Returns 1 on 404 from both, and on any other download failure.
+  download() {
+    local name="$1"
+    local kind url status
+    for kind in tags heads; do
+      url="$REPOSITORY/refs/$kind/$ref/$name"
+      # --proto-redir keeps a redirect from downgrading the download to http.
+      if ! status="$(curl -sSL --proto-redir =https -o "$workdir/$name" -w '%{http_code}' "$url")"; then
+        return 1
+      fi
+      [[ "$status" == "200" ]] && return 0
+      [[ "$status" == "404" ]] || return 1
+    done
+    return 1
+  }
+
   echo "==> Downloading the installer ($ref)"
   local file
   for file in "${FILES[@]}"; do
-    # --proto-redir keeps a redirect from downgrading the download to http.
-    curl -fsSL --proto-redir =https -o "$workdir/$file" "$base/$file" \
-      || die "could not download $base/$file"
+    download "$file" \
+      || die "could not download $REPOSITORY/refs/tags/$ref/$file or refs/heads/$ref/$file"
   done
 
   bash "$workdir/install.sh" --id "$id" ${passthrough[@]+"${passthrough[@]}"}
