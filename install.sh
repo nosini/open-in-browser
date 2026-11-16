@@ -149,18 +149,38 @@ if isinstance(origins, list):
 PY
 }
 
-# Without --id, every browser must either keep an existing registration or have
-# a key to derive one from. Fail before writing anything rather than leave a
-# placeholder that can never connect.
+# Without --id, browsers with an existing registration keep it. Browsers without
+# one cannot be registered for an unknown extension, so they are skipped; one
+# unrelated browser must not stop the update of all the others. Only when no
+# target has a registration at all is there nothing to do: fail before writing
+# anything rather than leave a placeholder that can never connect.
+REGISTERED_TARGETS=()
+SKIPPED_TARGETS=()
 if [[ -z "$ID_FROM_EXTENSION" && -z "$EXTENSION_ID" ]]; then
   for user_data_dir in "${TARGETS[@]}"; do
-    if [[ -z "$(existing_origins "$user_data_dir/NativeMessagingHosts/$HOST_NAME.json")" ]]; then
-      echo "Error: no --id given, and no existing host registration to reuse." >&2
-      echo "       Pass --id <extension-id> from the extension's setup page," >&2
-      echo "       or set EXTENSION_KEY_FILE to the signing key that produced it." >&2
-      exit 1
+    manifest="$user_data_dir/NativeMessagingHosts/$HOST_NAME.json"
+    if [[ -n "$(existing_origins "$manifest")" ]]; then
+      REGISTERED_TARGETS+=("$user_data_dir")
+    else
+      SKIPPED_TARGETS+=("$user_data_dir")
     fi
   done
+
+  if [[ ${#REGISTERED_TARGETS[@]} -eq 0 ]]; then
+    echo "Error: no --id given, and no existing host registration to reuse." >&2
+    echo "       Pass --id <extension-id> from the extension's setup page," >&2
+    echo "       or set EXTENSION_KEY_FILE to the signing key that produced it." >&2
+    exit 1
+  fi
+
+  if [[ ${#SKIPPED_TARGETS[@]} -gt 0 ]]; then
+    for user_data_dir in "${SKIPPED_TARGETS[@]}"; do
+      echo "Skipping (no existing registration): ${user_data_dir/#$HOME/\~}" >&2
+    done
+    echo "       Re-run with --id <extension-id> to register those browsers." >&2
+  fi
+
+  TARGETS=("${REGISTERED_TARGETS[@]}")
 fi
 
 # ── Install the native host ───────────────────────────────────────────────────

@@ -43,10 +43,13 @@ async function check() {
     if (!result || typeof result !== "object") {
       throw new Error("The background page did not answer.");
     }
-    element("install").hidden = result.reachable;
-    element("configure").hidden = !result.reachable;
+    const showInstall = !result.reachable || Boolean(result.outdated);
+    element("install").hidden = !showInstall;
+    element("configure").hidden = showInstall;
     if (result.ok) {
       showStatus("ok", `The helper app is working. ${result.count} domain(s) loaded.`);
+    } else if (result.outdated) {
+      showStatus("error", "The helper app is out of date. The command below updates it.", result.error);
     } else if (result.reachable) {
       showStatus("error", "The helper app is installed, but reported a problem:", result.error);
     } else {

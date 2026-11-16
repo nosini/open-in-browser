@@ -13,6 +13,10 @@ from urllib.parse import urlsplit
 
 CONFIG_DIR_NAME = "open-in-browser"
 
+# Bump when a change to the extension<->host messages breaks older versions.
+# Hosts installed before this constant existed speak protocol 1.
+PROTOCOL_VERSION = 2
+
 
 def default_domains_file():
     """
@@ -56,6 +60,14 @@ def send_message(payload):
     sys.stdout.buffer.write(struct.pack("@I", len(encoded)))
     sys.stdout.buffer.write(encoded)
     sys.stdout.buffer.flush()
+
+
+def send_error(error):
+    """
+    Report an error, including the protocol so an extension can tell a broken
+    current host from an outdated one that does not know this field.
+    """
+    send_message({"protocol": PROTOCOL_VERSION, "status": "error", "error": error})
 
 
 def normalize_domain(domain):
@@ -202,13 +214,14 @@ def handle_message(message):
     if action == "get_domains":
         aliases, entries, error = parse_domains_file()
         if error:
-            send_message({"status": "error", "error": error})
+            send_error(error)
             return
         resolved = [
             {"domain": e["domain"], "browser": resolve_browser(e["browser"], aliases)}
             for e in entries
         ]
         send_message({
+            "protocol": PROTOCOL_VERSION,
             "domains": resolved,
             "browsers": aliases,
         })
@@ -217,24 +230,24 @@ def handle_message(message):
         handle_open(message)
 
     else:
-        send_message({"status": "error", "error": f"Unknown action: {action}"})
+        send_error(f"Unknown action: {action}")
 
 
 def handle_open(message):
     url = message.get("url", "")
     if not isinstance(url, str) or not url.strip():
-        send_message({"status": "error", "error": "No URL given."})
+        send_error("No URL given.")
         return
     url = url.strip()
 
     parsed = urlsplit(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        send_message({"status": "error", "error": "Only http and https URLs can be opened."})
+        send_error("Only http and https URLs can be opened.")
         return
 
     aliases, entries, error = parse_domains_file()
     if error:
-        send_message({"status": "error", "error": error})
+        send_error(error)
         return
 
     # The extension may name a [browsers] alias; anything else is rejected
@@ -242,23 +255,20 @@ def handle_open(message):
     alias = message.get("browser")
     if alias:
         if not isinstance(alias, str) or alias not in aliases:
-            send_message({"status": "error", "error": f"Unknown browser alias: {alias}"})
+            send_error(f"Unknown browser alias: {alias}")
             return
         command = aliases[alias]
     else:
         entry = match_domain(parsed.hostname.lower(), entries)
         if not entry:
-            send_message({
-                "status": "error",
-                "error": f"No browser configured for {parsed.hostname}",
-            })
+            send_error(f"No browser configured for {parsed.hostname}")
             return
         command = resolve_browser(entry["browser"], aliases)
 
     try:
         open_in_browser(url, command)
     except Exception as error:
-        send_message({"status": "error", "error": str(error)})
+        send_error(str(error))
     else:
         send_message({"status": "ok"})
 
@@ -273,7 +283,7 @@ def main():
         # Config/read errors must be reported to the extension, not left as a
         # crash that looks like a missing installation.
         try:
-            send_message({"status": "error", "error": str(error)})
+            send_error(str(error))
         except Exception:
             pass
 

@@ -38,6 +38,7 @@ class DomainsFileTests(unittest.TestCase):
 
                 payload = send.call_args.args[0]
                 self.assertNotIn("error", payload)
+                self.assertEqual(payload["protocol"], native_host.PROTOCOL_VERSION)
                 self.assertEqual(payload["browsers"], {"custom": command})
                 self.assertEqual(payload["domains"], [
                     {"domain": "example.com", "browser": command},
@@ -204,6 +205,7 @@ class OpenMessageTests(unittest.TestCase):
         ), patch.object(native_host, "send_message") as send:
             native_host.handle_open({"url": "https://example.com/"})
         self.assertEqual(send.call_args.args[0], {
+            "protocol": native_host.PROTOCOL_VERSION,
             "status": "error",
             "error": "browser command exited with status 1",
         })
@@ -251,6 +253,7 @@ class HostErrorTests(unittest.TestCase):
              patch.object(native_host, "send_message") as send:
             native_host.main()
         self.assertEqual(send.call_args.args[0], {
+            "protocol": native_host.PROTOCOL_VERSION,
             "status": "error",
             "error": "permission denied",
         })
@@ -263,9 +266,23 @@ class HostErrorTests(unittest.TestCase):
              patch.object(native_host, "send_message") as send:
             native_host.main()
         self.assertEqual(send.call_args.args[0], {
+            "protocol": native_host.PROTOCOL_VERSION,
             "status": "error",
             "error": "domains.txt not found",
         })
+
+
+class ProtocolTests(unittest.TestCase):
+    def test_get_domains_success_and_error_replies_include_the_protocol(self):
+        for error in (None, "domains.txt not found"):
+            with self.subTest(error=error), \
+                 patch.object(native_host, "parse_domains_file", return_value=({}, [], error)), \
+                 patch.object(native_host, "send_message") as send:
+                native_host.handle_message({"action": "get_domains"})
+            payload = send.call_args.args[0]
+            self.assertEqual(payload["protocol"], native_host.PROTOCOL_VERSION)
+            if error:
+                self.assertEqual(payload["status"], "error")
 
 
 if __name__ == "__main__":

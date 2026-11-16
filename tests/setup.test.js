@@ -99,6 +99,16 @@ test("a working host hides the install steps", async () => {
   assert.match(state.element("status").textContent, /3 domain\(s\) loaded/);
 });
 
+test("an outdated host shows the install command to update it", async () => {
+  const error = "The helper app is older than this extension and must be reinstalled.";
+  const state = await page({ ok: false, reachable: true, outdated: true, error });
+  assert.equal(state.element("install").hidden, false);
+  assert.equal(state.element("configure").hidden, true);
+  assert.equal(state.element("status").className, "status error");
+  assert.match(state.element("status").textContent, /out of date.*command below updates it/);
+  assert.ok(state.element("status").textContent.endsWith(error));
+});
+
 test("a config error keeps the install steps hidden and shows the host's message as text", async () => {
   const error = '<img src=x onerror="alert(1)"> domains.txt not found';
   const state = await page({ ok: false, reachable: true, error });

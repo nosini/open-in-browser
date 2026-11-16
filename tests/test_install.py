@@ -133,7 +133,7 @@ class BootstrapTests(unittest.TestCase):
             env={"PATH": os.environ["PATH"], "HOME": str(self.home)},
             stdout=subprocess.PIPE, timeout=30,
         ).stdout
-        self.assertEqual(json.loads(reply[4:]), {"domains": [], "browsers": {}})
+        self.assertEqual(json.loads(reply[4:]), {"protocol": 2, "domains": [], "browsers": {}})
 
     def test_run_from_a_file_and_branch_refs(self):
         self.assert_installed(self.bootstrap("--id", EXTENSION_ID, "--ref", "main"))
@@ -163,6 +163,32 @@ class BootstrapTests(unittest.TestCase):
             f"chrome-extension://{EXTENSION_ID}/",
         ])
         self.assertIn("Kept the existing extension registration.", result.stdout)
+
+    def test_without_an_id_browsers_without_a_registration_are_skipped(self):
+        other = self.home / ".config" / "other-browser"
+        (other / "Default").mkdir(parents=True)
+        (other / "Local State").write_text("{}")
+
+        # The registered browser keeps its old origin instead of getting one
+        # derived from a key that does not exist.
+        kept_origin = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+        self.manifest.parent.mkdir(parents=True)
+        self.manifest.write_text(json.dumps({
+            "name": "open_in_browser",
+            "description": "old",
+            "path": "/old/path",
+            "type": "stdio",
+            "allowed_origins": [kept_origin],
+        }))
+
+        environment = self.environment(EXTENSION_KEY_FILE=str(self.home / "missing.pem"))
+        result = self.install(environment=environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.manifest.read_text())["allowed_origins"], [kept_origin])
+        self.assertFalse((other / "NativeMessagingHosts" / "open_in_browser.json").exists())
+        self.assertIn(str(other).replace(str(self.home), "~"), result.stderr)
+        self.assertIn("--id <extension-id>", result.stderr)
+        self.assertTrue(self.host.exists())
 
     def test_without_an_id_or_registration_it_fails_instead_of_writing_a_placeholder(self):
         environment = self.environment(EXTENSION_KEY_FILE=str(self.home / "missing.pem"))

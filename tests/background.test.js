@@ -175,8 +175,9 @@ test("overlapping menu rebuilds are serialized and leave the latest aliases", as
 const HOST_MISSING = () => ({ lastError: "Specified native messaging host not found." });
 const HOST_FORBIDDEN = () => ({ lastError: "Access to the specified native messaging host is forbidden." });
 const HOST_SILENT = () => ({ exit: true });
-const HOST_CONFIG_ERROR = () => ({ status: "error", error: "domains.txt not found at /home/user/.config/open-in-browser/domains.txt" });
-const HOST_OK = () => ({ domains: domains("a.example"), browsers: { firefox: "firefox" } });
+const HOST_CONFIG_ERROR = () => ({ protocol: 2, status: "error", error: "domains.txt not found at /home/user/.config/open-in-browser/domains.txt" });
+const HOST_OK = () => ({ protocol: 2, domains: domains("a.example"), browsers: { firefox: "firefox" } });
+const HOST_OUTDATED = () => ({ domains: domains("a.example"), browsers: { firefox: "firefox" } });
 
 // Runs background.js against a simulated native host. `host` maps a request to
 // a reply, a disconnect with lastError, or a disconnect with no reply at all.
@@ -310,6 +311,7 @@ function openHost(overrides = {}) {
   return (message) => {
     if (message.action === "open") return overrides.open?.() ?? { status: "ok" };
     return {
+      protocol: 2,
       domains: overrides.domains ?? domains("a.example"),
       browsers: overrides.browsers ?? { firefox: "firefox" },
     };
@@ -381,6 +383,41 @@ test("the setup page's check tells a missing host from a broken config", async (
     ok: false, reachable: true, error: HOST_CONFIG_ERROR().error,
   });
   assert.deepEqual(await lifecycle(HOST_OK).checkHost(), { ok: true, reachable: true, count: 1 });
+});
+
+test("an outdated host is reported without changing rules, storage or menus", async () => {
+  for (const protocol of [undefined, 1]) {
+    const updates = [];
+    const state = lifecycle(() => ({
+      protocol,
+      domains: domains("stale.example"),
+      browsers: { librewolf: "librewolf" },
+    }), {
+      dnr: {
+        async getDynamicRules() { return []; },
+        async updateDynamicRules(options) { updates.push(structuredClone(options)); },
+      },
+    });
+    await prime(state, domains("kept.example"));
+
+    const result = await state.checkHost();
+    assert.equal(result.ok, false);
+    assert.equal(result.reachable, true);
+    assert.equal(result.outdated, true);
+    assert.match(result.error, /older than this extension/);
+    assert.deepEqual(state.stored.domains, domains("kept.example"));
+    assert.deepEqual(state.stored.browsers, { firefox: "firefox" });
+    assert.deepEqual(updates, []);
+    assert.deepEqual(state.menus(), []);
+  }
+});
+
+test("updating with an outdated host opens the setup page", async () => {
+  for (const reason of ["install", "update"]) {
+    const state = lifecycle(HOST_OUTDATED);
+    await state.listeners.installed({ reason });
+    assert.deepEqual(state.opened, [SETUP_URL], reason);
+  }
 });
 
 test("a failed rule update is reported and domains are not cached", async () => {

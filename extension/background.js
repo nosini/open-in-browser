@@ -1,5 +1,9 @@
 const NATIVE_HOST = "open_in_browser";
 
+// Must match PROTOCOL_VERSION in native_host.py. Hosts from before that constant
+// existed are protocol 1 and silently ignore browser selection by domain.
+const HOST_PROTOCOL = 2;
+
 // ── Native host communication ─────────────────────────────────────────────────
 
 function isHostUnreachable(message) {
@@ -29,10 +33,11 @@ function callNativeHost(message) {
 
 // ── Domain list management ────────────────────────────────────────────────────
 
-// Resolves to { ok, reachable, error?, count? }. `reachable: false` means the
-// native host could not be started at all (not installed or not allowed for
-// this extension ID), which only installing it can fix; `reachable: true`
-// with an error means the host ran but its config is broken.
+// Resolves to { ok, reachable, outdated?, error?, count? }. `reachable: false`
+// means the native host could not be started at all (not installed or not
+// allowed for this extension ID), which only installing it can fix;
+// `outdated: true` means an older helper replied and must be replaced;
+// `reachable: true` with an error means the host ran but its config is broken.
 async function loadDomains() {
   let response;
   try {
@@ -43,6 +48,15 @@ async function loadDomains() {
   }
 
   try {
+    // A helper older than this extension would silently open every site in
+    // Firefox, so it must be reinstalled. Check this before the status error:
+    // a current host's config errors are not a protocol problem.
+    if (response.protocol !== HOST_PROTOCOL) {
+      const error = "The helper app is older than this extension and must be reinstalled.";
+      console.error("[open-in-browser] Native host protocol is outdated:", response.protocol);
+      return { ok: false, reachable: true, outdated: true, error };
+    }
+
     // A native-host error (e.g. missing domains.txt) must not wipe the working
     // config: keep the cached domains, rules, and menus untouched.
     if (response.status === "error" || response.error) {
@@ -459,10 +473,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   const status = await loadDomains();
-  // Also covers updates across a host rename. Browser updates are left alone:
-  // popping a tab after every browser update would be noise. Config errors are
-  // reported by the icon click or setup page, not treated as a missing install.
-  if (!status.reachable && (reason === "install" || reason === "update")) {
+  // Also covers updates across a host rename and an extension update that left
+  // an older helper behind. Browser updates are left alone: popping a tab after
+  // every browser update would be noise. Config errors are reported by the icon
+  // click or setup page, not treated as a missing install.
+  if ((!status.reachable || status.outdated) && (reason === "install" || reason === "update")) {
     openSetupPage();
   }
 });

@@ -57,6 +57,10 @@ Chromium-based browser on your system. The helper only accepts connections
 from your extension's ID. If you run the command again, your existing
 configuration and extension registration are kept.
 
+After updating the extension, update the helper too: the two must agree on
+their message protocol. If the extension finds an older helper, it opens this
+setup page so you can run the command again; that replaces the old helper.
+
 You can reopen the setup page any time from the extension's **Options**. It
 also opens by itself when clicking the extension icon fails.
 
